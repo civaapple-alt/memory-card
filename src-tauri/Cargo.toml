@@ -1,0 +1,45 @@
+[package]
+name = "memory-card"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "memory_card_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+anyhow = "1.0.104"
+thiserror = "2.0.20"
+dotenvy = "0.15.7"
+directories = "6.0.0"
+# 只用 Windows 原生 schannel（native-tls）。不要开 rustls：它会拉 aws-lc-sys，
+# 而本机没有 cmake/nasm，构建会直接失败。
+# 注意：reqwest 0.13 起 default-tls = ["rustls"]（0.12 时代才是 native-tls），
+# 所以必须显式写 native-tls，不能图省事写 default-tls。
+reqwest = { version = "0.13.5", default-features = false, features = ["native-tls", "json"] }
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
