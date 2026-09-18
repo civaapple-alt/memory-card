@@ -663,3 +663,41 @@ button.seg-on {
 ::-webkit-scrollbar-thumb:hover {
   background: #333a45;
 }
+
+/* ── 拖拽取词 ────────────────────────────────────────────────
+   不做剪贴板监听后，这是唯一能降低摩擦的取词路径（PRD §4.2），
+   所以放置反馈要显眼：整个窗口框起来，中间一句"松手即查"。 */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  /* 不能吃掉 drop —— 处理逻辑挂在 window 上，这里纯粹是给眼睛看的。 */
+  pointer-events: none;
+}
+
+.drop-hint {
+  padding: 8px 18px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #0a1420;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* 拖进来的东西不合格时的提示条。比 errorbar 低一档：它只是"没查"，不是"出错"。 */
+.dropbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--warn) 18%, var(--panel));
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  color: var(--fg);
+  font-size: 12px;
+}

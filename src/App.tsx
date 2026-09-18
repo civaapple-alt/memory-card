@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errText } from "./api";
+import { classifyDrop, dropHasFiles, readDropText } from "./dragdrop";
 import type { Deck, HistoryItem, Stats } from "./types";
 import { DecksView } from "./views/DecksView";
 import { HistoryView } from "./views/HistoryView";
@@ -29,6 +30,10 @@ export default function App() {
   const [seed, setSeed] = useState<LookupSeed | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
   const [booting, setBooting] = useState(true);
+  const [dragOver, setDragOver] = useState(false);
+  const [dropNotice, setDropNotice] = useState<string | null>(null);
+  /** dragenter/dragleave 会为每个子元素各来一次，所以用计数器而不是布尔值。 */
+  const dragDepth = useRef(0);
 
   const refresh = useCallback(async () => {
     const [ds, st] = await Promise.all([api.listDecks(), api.getStats()]);
@@ -78,6 +83,72 @@ export default function App() {
     setTab("lookup");
   };
 
+  const handleDrop = useCallback(
+    (raw: string) => {
+      const cls = classifyDrop(raw);
+      if (cls.kind === "reject") {
+        // PRD §4.2：判断不过就只提示，不自动查 —— 免得拖错东西白烧一次请求。
+        setDropNotice(cls.reason);
+        return;
+      }
+      if (deckId == null) {
+        setDropNotice("先选一个卡包 —— 释义要靠卡包关键词限定领域。");
+        setTab("lookup");
+        return;
+      }
+      setDropNotice(null);
+      setSeed({
+        deckId,
+        term: cls.text,
+        sentence: cls.kind === "sentence" ? cls.text : null,
+        nonce: Date.now(),
+      });
+      setTab("lookup");
+    },
+    [deckId],
+  );
+
+  // 拖拽取词：不做剪贴板监听之后，这是唯一能降低摩擦的取词路径（PRD §4.2），
+  // 所以整个窗口都是放置区。
+  //
+  // 必须 preventDefault：WebView2 对拖进来的文件默认行为是**直接导航过去**，
+  // 那样整个 app 就没了。dragover 上不 preventDefault 则根本收不到 drop。
+  useEffect(() => {
+    const onEnter = (e: DragEvent) => {
+      e.preventDefault();
+      dragDepth.current += 1;
+      setDragOver(true);
+    };
+    const onOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    };
+    const onLeave = () => {
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragOver(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      dragDepth.current = 0;
+      setDragOver(false);
+      if (dropHasFiles(e.dataTransfer)) {
+        setDropNotice("拖进来的是文件，不是文字。");
+        return;
+      }
+      handleDrop(readDropText(e.dataTransfer));
+    };
+    window.addEventListener("dragenter", onEnter);
+    window.addEventListener("dragover", onOver);
+    window.addEventListener("dragleave", onLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onEnter);
+      window.removeEventListener("dragover", onOver);
+      window.removeEventListener("dragleave", onLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, [handleDrop]);
+
   const dueNow = stats?.due_now ?? 0;
 
   return (
@@ -99,6 +170,15 @@ export default function App() {
         <div className="errorbar">
           <span>{bootError}</span>
           <button className="icon-btn" onClick={() => setBootError(null)}>
+            ×
+          </button>
+        </div>
+      )}
+
+      {dropNotice && (
+        <div className="dropbar">
+          <span>{dropNotice}</span>
+          <button className="icon-btn" onClick={() => setDropNotice(null)}>
             ×
           </button>
         </div>
@@ -144,6 +224,12 @@ export default function App() {
         <span>{decks.find((d) => d.id === deckId)?.name ?? "未选卡包"}</span>
         <span>{stats ? `${stats.total_cards} 张卡 · ${dueNow} 待复习` : "—"}</span>
       </footer>
+
+      {dragOver && (
+        <div className="drop-overlay">
+          <div className="drop-hint">松手即查</div>
+        </div>
+      )}
     </div>
   );
 }

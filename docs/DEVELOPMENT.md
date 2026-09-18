@@ -88,7 +88,13 @@ cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
 3. **`CI=1` 会让 tauri CLI 报 `invalid value '1' for '--ci'`。** 脚本里先 `Remove-Item Env:CI`。
 4. **长任务不能用后台任务。** shell 命令一返回，子进程就被杀（rustc 报 `0xc000013a` STATUS_CONTROL_C_EXIT）。用 `Start-Process` + `Wait-Process -Timeout` 把输出重定向到日志，再轮询日志。**不要用 `Win32_Process.Create`** —— 它会弹出一个可见的控制台窗口。
 5. **激活窗口后必须断言，不能盲发按键。** 前台锁会让 `SetForegroundWindow` 静默失败；`ui-drive.ps1` 的做法是激活后检查 `GetForegroundWindow`，不是目标窗口就直接抛错退出 —— 否则按键会落进用户正在用的编辑器里。
-6. **SendKeys 往 WebView2 敲英文会被中文输入法吞成拼音缓冲。** 改用剪贴板粘贴（`Set-Clipboard` + `^{v}`），粘完**截图确认文字真的进去了**再发查询。**不要发 ESC** 去关候选框 —— ESC 会把已输入的内容清空。
+6. **SendKeys 往 WebView2 敲英文会被中文输入法吞进候选缓冲 —— 而且失败是静默的。** 本机活动输入语言是"中文(简体) - 美式键盘"（`GetKeyboardLayout` 返回 langId `0x0804`），逐字键入的 `handle` 会进输入法的候选缓冲、**不会落到输入框**，而脚本照样打印 `sent keys: handle`。上次这一步是靠**人工按 Shift 切到英文**才过去的。
+   * 解法是**不要逐字键入**：用 `-Paste`（`Set-Clipboard` + `^{v}`）。`Ctrl+V` 不被输入法拦截，实测可靠。
+   * 控制键（`{ENTER}` / `{TAB}` / `{DOWN}` / `^{v}`）不受影响，照用。
+   * `ui-drive.ps1` 现在会在「要键入字面字符 + 目标窗口输入法是中文」时**直接报错**，而不是发出去再假装成功；确属必要用 `-AssumeEnglishInput` 硬发。
+   * **脚本不替你切换输入法** —— 那是你机器的全局状态，不该被一个调试脚本改。要切就自己按 Shift。
+   * 粘贴之后**截图确认文字真的进去了**再发查询。
+   * **不要发 ESC** 去关候选框 —— ESC 会把已输入的内容清空。
 7. **启动应用时要把仓库根作为 cwd**，否则 `dotenvy` 找不到 `.env`。
 
 ## scripts/

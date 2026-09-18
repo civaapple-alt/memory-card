@@ -6,9 +6,12 @@
 
   用法:
     pwsh -File scripts/ui-drive.ps1 -ProcessName memory-card -ClickAt "200,213"
-    pwsh -File scripts/ui-drive.ps1 -ProcessName memory-card -Keys "handle"
+    pwsh -File scripts/ui-drive.ps1 -ProcessName memory-card -Paste "handle"
+    pwsh -File scripts/ui-drive.ps1 -ProcessName memory-card -Keys "{TAB}" -Wait 300
     pwsh -File scripts/ui-drive.ps1 -ProcessName memory-card -Keys "^{ENTER}" -Wait 6000 -Out .shot.png
     坐标是相对窗口矩形左上角的（和截图坐标系一致）。
+    键入字面英文字符前会检查输入法：目标窗口是中文输入法时直接报错（可 -AssumeEnglishInput 硬发）。
+    因为逐字键入会被输入法吞进候选缓冲、内容不会落到输入框，而且失败是静默的。
 #>
 param(
   [Parameter(Mandatory = $true)][string]$ProcessName,
@@ -16,6 +19,7 @@ param(
   [string]$Paste = '',
   [string]$ClickAt = '',
   [int]$Wheel = 0,
+  [switch]$AssumeEnglishInput,
   [int]$Wait = 600,
   [string]$Out = ''
 )
@@ -33,6 +37,8 @@ public struct RECT { public int Left; public int Top; public int Right; public i
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
 [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, IntPtr e);
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr pid);
+[DllImport("user32.dll")] public static extern IntPtr GetKeyboardLayout(uint idThread);
 '@
 }
 
@@ -66,8 +72,18 @@ if ($ClickAt) {
 
 if ($Keys) {
   if ([MC.Win]::GetForegroundWindow() -ne $h) { throw "窗口在发按键前失去前台，放弃" }
+  # 输入法守卫：逐字键入字面字符时，中文输入法会把字母吞进候选缓冲，内容不会落到输入框。
+  # 失败是静默的（脚本会以为发成功了），所以这里宁可报错也不发。控制键（{ENTER}/{TAB}/^{v}）不受影响。
+  $literal = ($Keys -replace '\^?\{[^}]*\}', '' -replace '\^.?', '') -match '[A-Za-z0-9]'
+  if ($literal -and -not $AssumeEnglishInput) {
+    $tid = [MC.Win]::GetWindowThreadProcessId($h, [IntPtr]::Zero)
+    $langId = ([int64][MC.Win]::GetKeyboardLayout($tid)) -band 0xFFFF
+    if (($langId -band 0x3FF) -eq 0x04) {
+      throw ("输入法守卫：要键入字面字符（$Keys），但目标窗口输入法是中文（langId=0x{0:X4}）。逐字键入会被吞进候选缓冲、内容不会落到输入框，而且失败是静默的。改用 -Paste；确属必要加 -AssumeEnglishInput。脚本不替你切换输入法。" -f $langId)
+    }
+  }
   [System.Windows.Forms.SendKeys]::SendWait($Keys)
-  "sent keys: $Keys"
+  "sent keys: $Keys  <- 只是发出去了，无法确认是否落进目标控件（输入法/焦点异常会静默丢失）；要可确认请用 -Paste 并截图"
 }
 
 if ($Paste) {
