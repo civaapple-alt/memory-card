@@ -75,6 +75,12 @@ cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
 
 8. `srs::should_suspend` 已删除。逾期休眠由 `lib.rs` 里一条批量 UPDATE 统一执行，不要在单卡路径里重新加一份判断。
 
+### 范围约束（别顺手加回来）
+
+* **不做剪贴板监听**（PRD §2 非目标，2026-09-18 决定）。不要引入 `tauri-plugin-clipboard-manager`，也不要写轮询剪贴板变化的循环。产品取词只有两条路：拖拽入窗 + 手动粘贴。
+* **不需要全局热键，也不需要模拟按键（SendInput）**。两条路都不模拟用户输入：一条靠拖拽事件，一条靠用户在输入框里自己粘。同样是刻意选的，不是还没做。
+* 托盘：`Cargo.toml` 里开着 `tray-icon` feature 但没有代码。真要加，连着 PRD §6 的"托盘显示待复习数"一起做，别只开开关。
+
 ## 这台机器上的坑
 
 1. **`reqwest` 0.13 的 `default-tls` 是 rustls**（0.12 时代它才是 native-tls）→ 会拉 `aws-lc-sys` → 需要 cmake/nasm → 本机没有 → 编译直接失败。必须写 `default-features = false, features = ["native-tls", "json"]`，Windows 下走 schannel，零外部依赖。
