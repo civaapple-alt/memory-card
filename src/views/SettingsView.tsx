@@ -153,7 +153,7 @@ export function SettingsView({
       </Panel>
 
       <div className="debug">
-        还没接的功能：剪贴板监听、拖拽取词、托盘图标、到期通知、释义手工编辑、个人术语表界面。
+        还没接的功能：剪贴板监听、托盘图标、到期通知、释义手工编辑、个人术语表界面。
       </div>
     </div>
   );

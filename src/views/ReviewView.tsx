@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, errText } from "../api";
+import { useActionBar } from "../actionbar";
 import { fmtInterval } from "../format";
 import { Badge, Empty, ErrorBar, Panel, Spinner } from "../ui";
 import type { Rating, ReviewCard } from "../types";
+import { DefinitionBody } from "./DefinitionBody";
 
 const RATINGS: { n: Rating; label: string; hint: string }[] = [
   { n: 1, label: "忘了", hint: "1" },
@@ -103,6 +105,30 @@ export function ReviewView({
     return () => window.removeEventListener("keydown", onKey);
   }, [flipped, reveal, rate]);
 
+  // D4：翻面/评分同样常驻底部，拇指区就能点完一整轮。
+  useActionBar(
+    loading || !current ? null : flipped ? (
+      <div className="rating-row">
+        {RATINGS.map((r) => (
+          <button
+            key={r.n}
+            className={`rate rate-${r.n}`}
+            disabled={busy}
+            onClick={() => void rate(r.n)}
+          >
+            <em>{r.hint}</em>
+            {r.label}
+          </button>
+        ))}
+      </div>
+    ) : (
+      <button className="primary action-primary" onClick={reveal}>
+        翻面（空格 / Enter）
+      </button>
+    ),
+    [loading, current, flipped, busy, rate, reveal],
+  );
+
   if (loading) {
     return (
       <div className="view center">
@@ -176,62 +202,18 @@ export function ReviewView({
         )}
 
         {flipped ? (
-          <>
-            <div className="meaning">{current.domain_meaning}</div>
-            {current.in_context && (
-              <div className="block">
-                <div className="block-label">在这句话里</div>
-                <div>{current.in_context}</div>
-              </div>
-            )}
-            {current.why_translation_fails && (
-              <div className="block why">
-                <div className="block-label">为什么通用翻译会错</div>
-                <div>{current.why_translation_fails}</div>
-              </div>
-            )}
-            {current.general_meaning && (
-              <div className="block dim">
-                <div className="block-label">通用义（对照）</div>
-                <div>{current.general_meaning}</div>
-              </div>
-            )}
-            {current.examples.length > 0 && (
-              <div className="block">
-                <div className="block-label">例句</div>
-                <ul className="examples">
-                  {current.examples.map((x, i) => (
-                    <li key={i}>{x}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </>
+          <DefinitionBody
+            domainMeaning={current.domain_meaning}
+            inContext={current.in_context}
+            examples={current.examples}
+            general={current.general_meaning}
+          />
         ) : (
           <div className="recall-prompt">
-            <div className="hint">先自己想一遍，再翻面</div>
-            <button className="primary big" onClick={reveal}>
-              翻面（空格）
-            </button>
+            <div className="hint">先自己想一遍，再翻面（空格 / Enter）</div>
           </div>
         )}
       </Panel>
-
-      {flipped && (
-        <div className="rating-row">
-          {RATINGS.map((r) => (
-            <button
-              key={r.n}
-              className={`rate rate-${r.n}`}
-              disabled={busy}
-              onClick={() => void rate(r.n)}
-            >
-              <em>{r.hint}</em>
-              {r.label}
-            </button>
-          ))}
-        </div>
-      )}
 
       {note && <div className="debug">{note}</div>}
       {busy && (

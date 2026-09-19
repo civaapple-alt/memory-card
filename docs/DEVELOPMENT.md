@@ -56,6 +56,8 @@ cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
 | `src/format.ts` | 时间 / 间隔 / 置信度的显示格式 |
 | `src/ui.tsx` | `Panel` / `Field` / `Badge` / `Notice` 等零件 |
 | `src/views/` | Lookup / Review / History / Decks / Settings 五个页面 |
+| `src/actionbar.tsx` | 底部常驻动作栏的 context + `useActionBar`（主操作的唯一注入点） |
+| `src/views/DefinitionBody.tsx` | 释义正文块，取词页与复习页共用，保证显示顺序一致 |
 
 ## 不能改坏的约定
 
@@ -64,6 +66,13 @@ cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
 1. **prompt 前缀必须字节不变、且永远排在前面。** 前缀缓存按字节逐前缀匹配。固定前言 + 卡包作用域消息必须原样、有序、在最前，用户输入永远在最后。破坏它 → 缓存全失效，输入侧延迟和价格差 50 倍（缓存命中价是未命中的 1/50）。
 2. **改了 prompt 文本就要 bump `llm.rs::PROMPT_VERSION`。** 它参与 `def_cache` 的键；不 bump 会让旧释义被当成新 prompt 的产物复用。
 3. **`save_lookup` 必须保持 `ON CONFLICT(term_key) DO UPDATE` 只更新 `primary_definition_id` / `display_term`。** 绝不能顺手把 `due_at` / `reps` / `interval_days` 覆盖回去 —— 那等于"重复查一个词就清空它的复习进度"。
+
+### UI 契约（小窗是硬约束）
+
+* **主操作一律走底部常驻动作栏**（`src/actionbar.tsx` 的 `useActionBar`）。不要把"存入卡包""评分"这类主操作放回滚动区 —— 小窗只有 440×620，一滚动就得拖着找按钮，这正是这一版专门修掉的问题。
+* **不做"单词 / 句子"模式开关**。是词还是句由 `classifyDrop`（和拖拽同一个分类器）判断；两处判断一旦分叉，就会出现"拖进来的能查、粘进来的不能查"这类怪事。
+* **`why_translation_fails` 默认不展示**（PRD P3 修订）。字段与 prompt 都保留，别删；要重新展示先改 PRD。
+* 键盘：输入框内 `Enter` = 查询、`Shift+Enter` = 换行；结果出来后、焦点不在输入框时 `Enter` = 主操作、`Esc` = 丢弃。
 
 ### 改坏了会直接报错
 

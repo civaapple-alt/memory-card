@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, errText } from "./api";
+import { ActionBarContext } from "./actionbar";
 import { classifyDrop, dropHasFiles, readDropText } from "./dragdrop";
 import type { Deck, HistoryItem, Stats } from "./types";
 import { DecksView } from "./views/DecksView";
@@ -32,6 +33,8 @@ export default function App() {
   const [booting, setBooting] = useState(true);
   const [dragOver, setDragOver] = useState(false);
   const [dropNotice, setDropNotice] = useState<string | null>(null);
+  /** 底部常驻动作栏的内容：由当前页通过 useActionBar 注入（计划 D4）。 */
+  const [actionBar, setActionBar] = useState<ReactNode>(null);
   /** dragenter/dragleave 会为每个子元素各来一次，所以用计数器而不是布尔值。 */
   const dragDepth = useRef(0);
 
@@ -184,7 +187,8 @@ export default function App() {
         </div>
       )}
 
-      <main className="content">
+      <ActionBarContext.Provider value={setActionBar}>
+        <main className="content">
         {booting ? (
           <div className="view center">
             <span className="spinner" />
@@ -218,7 +222,10 @@ export default function App() {
             }}
           />
         )}
-      </main>
+        </main>
+      </ActionBarContext.Provider>
+
+      {actionBar !== null && <div className="actionbar">{actionBar}</div>}
 
       <footer className="statusbar">
         <span>{decks.find((d) => d.id === deckId)?.name ?? "未选卡包"}</span>

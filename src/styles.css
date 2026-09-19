@@ -316,8 +316,9 @@ button.seg-on {
 /* ------------------------------------------------------------------ 内容块 */
 
 .meaning {
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.6;
+  color: var(--fg);
 }
 
 .block {
@@ -700,4 +701,47 @@ button.seg-on {
   border-bottom: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
   color: var(--fg);
   font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ 底部常驻动作栏（计划 D4） */
+/* 主操作永远贴在窗口底部，不随内容滚动；各页用 useActionBar 注入内容。 */
+.actionbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: var(--elev);
+  border-top: 1px solid var(--border);
+}
+
+.actionbar > button {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+
+.actionbar .rating-row {
+  flex: 1 1 auto;
+}
+
+.action-primary {
+  font-weight: 600;
+}
+
+.action-done {
+  padding: 0 2px;
+}
+
+/* 卡包选择器下面那行领域关键词：轻，不抢标题。 */
+.deck-hint {
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+/* 收起输入区后显示当前词。 */
+.compact-term {
+  font-size: 15px;
+  font-weight: 600;
+  user-select: text;
+  word-break: break-word;
 }

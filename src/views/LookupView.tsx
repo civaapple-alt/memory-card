@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errText } from "../api";
+import { useActionBar } from "../actionbar";
+import { classifyDrop } from "../dragdrop";
 import { confidenceTone, fmtDue, nowSec } from "../format";
 import { Badge, ErrorBar, Field, Notice, Panel, Spinner } from "../ui";
 import type { Card, Deck, LookupResult } from "../types";
+import { DefinitionBody } from "./DefinitionBody";
 
 export interface LookupSeed {
   deckId: number;
@@ -28,13 +31,14 @@ export function LookupView({
   onSaved: () => void;
 }) {
   const [input, setInput] = useState("");
-  const [mode, setMode] = useState<Mode>("word");
   const [result, setResult] = useState<LookupResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<Card | null>(null);
   const [saving, setSaving] = useState(false);
+  /** 出结果后收起输入区，把屏幕让给释义；点"换个词"再展开。 */
+  const [compose, setCompose] = useState(true);
   const abortRef = useRef(0);
 
   const run = useCallback(
@@ -58,6 +62,7 @@ export function LookupView({
         );
         if (token !== abortRef.current) return;
         setResult(r);
+        setCompose(false);
       } catch (e) {
         if (token !== abortRef.current) return;
         setError(errText(e));
@@ -72,7 +77,6 @@ export function LookupView({
   useEffect(() => {
     if (!seed) return;
     setInput(seed.term);
-    setMode(seed.sentence ? "sentence" : "word");
     void run(seed.term, seed.sentence ? "sentence" : "word", seed.deckId);
   }, [seed, run]);
 
@@ -89,10 +93,21 @@ export function LookupView({
       setError("先选一个卡包 —— 释义要靠卡包关键词限定领域");
       return;
     }
-    void run(input, mode, deckId);
+    const text = input.trim();
+    if (!text) {
+      setError("请输入要查询的词或句子");
+      return;
+    }
+    // D1：不再让用户自己选单词/句子，交给 dragdrop 里同一个分类器判断。
+    const cls = classifyDrop(text);
+    if (cls.kind === "reject") {
+      setError(cls.reason);
+      return;
+    }
+    void run(text, cls.kind === "sentence" ? "sentence" : "word", deckId);
   };
 
-  const save = async () => {
+  const save = useCallback(async () => {
     if (!result || deckId == null) return;
     setSaving(true);
     setError(null);
@@ -113,72 +128,110 @@ export function LookupView({
     } finally {
       setSaving(false);
     }
-  };
+  }, [result, deckId, onSaved]);
 
   const d = result?.definition;
   const termForCard = d ? (d.lemma || result!.term).trim() : "";
   const tone = confidenceTone(d?.confidence ?? "");
+  const curDeck = decks.find((dk) => dk.id === deckId) ?? null;
+  const composing = !result || compose;
+
+  // D4：出结果后 Enter 直接入库、Esc 丢弃；焦点在输入框里时不拦。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      // 焦点在任何可交互控件上时，Enter 交还给该控件（按钮激活、Tab 导航都要它），
+      // 只有焦点落在"空白处"才升级成主操作。
+      const interactive =
+        !!t && (/^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(t.tagName) || t.isContentEditable);
+      if (e.key === "Enter" && result && !saved && !saving && !interactive) {
+        e.preventDefault();
+        void save();
+      } else if (e.key === "Escape") {
+        setResult(null);
+        setSaved(null);
+        setError(null);
+        setCompose(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [result, saved, saving, save]);
+
+  // D4：主操作进底部常驻动作栏，永远不用滚动去找它。
+  useActionBar(
+    result ? (
+      saved ? (
+        <span className="hint action-done">
+          已存入「{result.deck_name}」· {saved.display_term}
+        </span>
+      ) : (
+        <button className="primary action-primary" onClick={save} disabled={saving}>
+          {saving ? <Spinner /> : null}
+          {saving ? "入库中…" : `存入「${result.deck_name}」`}
+        </button>
+      )
+    ) : null,
+    [result, saved, saving, save],
+  );
 
   return (
     <div className="view">
       {error && <ErrorBar text={error} onClose={() => setError(null)} />}
 
-      <Panel
-        title="取词"
-        actions={
-          <div className="seg">
-            <button
-              className={mode === "word" ? "seg-on" : ""}
-              onClick={() => setMode("word")}
+      {composing ? (
+        <Panel title="取词" actions={<span className="hint">单词 / 句子自动识别</span>}>
+          <Field label="卡包">
+            <select
+              value={deckId ?? ""}
+              onChange={(e) => onDeckChange(Number(e.target.value))}
             >
-              单词
+              {decks.length === 0 && <option value="">（还没有卡包）</option>}
+              {decks.map((dk) => (
+                <option key={dk.id} value={dk.id}>
+                  {dk.name}
+                </option>
+              ))}
+            </select>
+            {curDeck && curDeck.keywords.length > 0 && (
+              <div className="hint deck-hint">领域：{curDeck.keywords.join(" / ")}</div>
+            )}
+          </Field>
+
+          <textarea
+            className="input-term"
+            rows={input.trim().length > 40 ? 3 : 1}
+            placeholder="handle / ship it / 直接贴一整句英文"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+          />
+
+          <div className="row">
+            <button className="primary" onClick={submit} disabled={busy}>
+              {busy ? <Spinner /> : null}
+              {busy ? `查询中 ${(elapsed / 1000).toFixed(1)}s` : "查询"}
             </button>
-            <button
-              className={mode === "sentence" ? "seg-on" : ""}
-              onClick={() => setMode("sentence")}
-            >
-              句子
-            </button>
+            <span className="hint">Enter 查询 · Shift+Enter 换行</span>
           </div>
-        }
-      >
-        <Field label="卡包" hint="决定释义的领域">
-          <select
-            value={deckId ?? ""}
-            onChange={(e) => onDeckChange(Number(e.target.value))}
-          >
-            {decks.length === 0 && <option value="">（还没有卡包）</option>}
-            {decks.map((dk) => (
-              <option key={dk.id} value={dk.id}>
-                {dk.name}
-                {dk.keywords.length > 0 ? ` · ${dk.keywords.join("/")}` : ""}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <textarea
-          className="input-term"
-          rows={mode === "sentence" ? 3 : 1}
-          placeholder={mode === "sentence" ? "贴一整句英文" : "handle / ship it / bounded"}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey || e.shiftKey)) {
-              e.preventDefault();
-              submit();
-            }
-          }}
-        />
-
-        <div className="row">
-          <button className="primary" onClick={submit} disabled={busy}>
-            {busy ? <Spinner /> : null}
-            {busy ? `查询中 ${(elapsed / 1000).toFixed(1)}s` : "查询"}
-          </button>
-          <span className="hint">Ctrl+Enter</span>
-        </div>
-      </Panel>
+        </Panel>
+      ) : (
+        <Panel
+          title="取词"
+          actions={
+            <button className="icon-btn" onClick={() => setCompose(true)}>
+              换个词
+            </button>
+          }
+        >
+          <div className="compact-term">{input.trim()}</div>
+        </Panel>
+      )}
 
       {d && result && (
         <>
@@ -196,94 +249,45 @@ export function LookupView({
               </>
             }
           >
-            <div className="meaning">{d.domain_meaning || "（模型没给出领域释义）"}</div>
-
-            {d.in_context && (
-              <div className="block">
-                <div className="block-label">在这句话里</div>
-                <div>{d.in_context}</div>
-              </div>
-            )}
-
-            {result.sentence && (
-              <div className="block">
-                <div className="block-label">原文</div>
-                <div className="quote">{result.sentence}</div>
-              </div>
-            )}
-
-            {d.why_translation_fails && (
-              <div className="block why">
-                <div className="block-label">为什么通用翻译会错</div>
-                <div>{d.why_translation_fails}</div>
-              </div>
-            )}
-
-            {d.general_meaning && (
-              <div className="block dim">
-                <div className="block-label">通用义（对照）</div>
-                <div>{d.general_meaning}</div>
-              </div>
-            )}
-
-            {d.examples.length > 0 && (
-              <div className="block">
-                <div className="block-label">例句</div>
-                <ul className="examples">
-                  {d.examples.map((x, i) => (
-                    <li key={i}>{x}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {d.collocations.length > 0 && (
-              <div className="block">
-                <div className="block-label">常见搭配</div>
-                <div className="chips">
-                  {d.collocations.map((c, i) => (
-                    <span className="chip" key={i}>
-                      {c}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
+            <DefinitionBody
+              domainMeaning={d.domain_meaning}
+              inContext={d.in_context}
+              sentence={result.sentence}
+              examples={d.examples}
+              collocations={d.collocations}
+              general={d.general_meaning}
+            />
           </Panel>
 
-          <Panel title="入卡">
-            {result.existing_in_deck && (
-              <Notice tone="warn">
-                当前卡包已有这个卡（复习 {result.existing_in_deck.reps} 次）。再次存入只更新释义，
-                <b>复习进度保留</b>。
-              </Notice>
-            )}
-            {result.existing_elsewhere.length > 0 && (
-              <Notice>
-                其他卡包也有：
-                {result.existing_elsewhere
-                  .map((c) => `${c.deck_name}（${c.reps} 次）`)
-                  .join("、")}
-                。同一个词在不同卡包是独立的两张卡，这是有意的。
-              </Notice>
-            )}
-            {saved ? (
-              <Notice tone="info">
-                已存入 <b>{result.deck_name}</b>：{saved.display_term}
-                {saved.due_at <= nowSec()
-                  ? "（现在就可以复习）"
-                  : `（${fmtDue(saved.due_at)}复习）`}
-              </Notice>
-            ) : (
-              <div className="row">
-                <button className="primary" onClick={save} disabled={saving}>
-                  {saving ? <Spinner /> : null}
-                  存入卡包「{result.deck_name}」
-                </button>
-                <span className="hint">卡片词形：{termForCard}</span>
-              </div>
-            )}
-          </Panel>
+          {(result.existing_in_deck ||
+            result.existing_elsewhere.length > 0 ||
+            saved) && (
+            <Panel title="入卡">
+              {result.existing_in_deck && (
+                <Notice tone="warn">
+                  当前卡包已有这个卡（复习 {result.existing_in_deck.reps} 次）。再次存入只更新释义，
+                  <b>复习进度保留</b>。
+                </Notice>
+              )}
+              {result.existing_elsewhere.length > 0 && (
+                <Notice>
+                  其他卡包也有：
+                  {result.existing_elsewhere
+                    .map((c) => `${c.deck_name}（${c.reps} 次）`)
+                    .join("、")}
+                  。同一个词在不同卡包是独立的两张卡，这是有意的。
+                </Notice>
+              )}
+              {saved && (
+                <Notice tone="info">
+                  已存入 <b>{result.deck_name}</b>：{saved.display_term}
+                  {saved.due_at <= nowSec()
+                    ? "（现在就可以复习）"
+                    : `（${fmtDue(saved.due_at)}复习）`}
+                </Notice>
+              )}
+            </Panel>
+          )}
 
           <div className="debug">
             {[

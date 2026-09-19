@@ -41,13 +41,13 @@ export function classifyDrop(raw: string): DropClass {
   if (text.length > MAX_CHARS) {
     return {
       kind: "reject",
-      reason: `太长了（${text.length} 字，上限 ${MAX_CHARS}）—— 拖一个词或一句话进来；整段文字请切到「句子」模式粘贴。`,
+      reason: `太长了（${text.length} 字，上限 ${MAX_CHARS}）—— 只取一个词或一句话。`,
     };
   }
   if (lines.length > MAX_LINES) {
     return {
       kind: "reject",
-      reason: `跨了 ${lines.length} 行，看着像代码块或整段文本 —— 只拖一个词，或切到「句子」模式粘贴。`,
+      reason: `跨了 ${lines.length} 行，看着像代码块或整段文本 —— 只取一个词或一句话。`,
     };
   }
   if (/^([a-zA-Z]:[\\/]|\\\\|\/|\.{1,2}[\\/]|~[\\/])/.test(text)) {
@@ -68,7 +68,7 @@ export function classifyDrop(raw: string): DropClass {
   if (/[{};]|=>|->|::/.test(text)) {
     return {
       kind: "reject",
-      reason: "看着像代码（有括号、分号或箭头）—— 只拖要查的词，或切到「句子」模式粘贴。",
+      reason: "看着像代码（有括号、分号或箭头）—— 只取要查的词或句子。",
     };
   }
   if (latinRatio(text) < 0.5) {
