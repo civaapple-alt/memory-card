@@ -39,6 +39,23 @@ pnpm tauri dev
 
 `.env` 已 gitignore。注意从资源管理器双击启动的应用**不继承 shell 环境变量** —— 这也是配置必须落库的原因。
 
+## 打包（Windows）
+
+```powershell
+Remove-Item Env:CI      # 本机 CI=1 会让 tauri CLI 报 invalid value '1' for '--ci'
+pnpm tauri build
+```
+
+`bundle.targets` 是 `"all"`，所以一次出三个产物：
+
+| 产物 | 用途 | 体积 |
+|---|---|---|
+| `src-tauri/target/release/memory-card.exe` | 免安装，双击即跑（仍需 WebView2 Runtime） | 6.5 MB |
+| `src-tauri/target/release/bundle/nsis/memory-card_0.1.0_x64-setup.exe` | 安装包，最小 | 2.3 MB |
+| `src-tauri/target/release/bundle/msi/memory-card_0.1.0_x64_en-US.msi` | MSI，走组策略 / 批量部署 | 3.2 MB |
+
+发行包**未做代码签名**，Windows 会弹 SmartScreen 警告 —— 本地自用点"仍要运行"即可。Key 在「设置」页填（双击启动不继承 shell 环境变量，见上）。
+
 ## 怎么用
 
 * **取词**：把选中的文字**拖进窗口**（放下即查），或选卡包后粘贴 / 输入再按 `Enter`（`Shift+Enter` 换行）。**不需要先选"单词 / 句子"** —— 工具用与拖拽同一个分类器自动判断，整句会连上下文一起送进去。输入框和拖拽共用同一套过滤（路径 / URL / 纯数字 / base64 / 代码行 / 超长 / 中文 只提示、不查）。剪贴板监听**不做** —— 见下方"明确不做"。

@@ -22,6 +22,8 @@
 pnpm install
 
 pnpm tauri dev                            # 开发窗口，前端热更新
+Remove-Item Env:CI                        # 见「坑 3」；只影响当前会话
+pnpm tauri build                          # release：独立 exe + msi + nsis 安装包
 pnpm tauri build --debug --no-bundle      # 产出 target/debug/memory-card.exe，不打安装包
 pnpm build                                # 只构建前端（vite build）
 npx tsc --noEmit                          # 前端类型检查
