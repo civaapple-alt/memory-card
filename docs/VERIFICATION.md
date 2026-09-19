@@ -204,17 +204,19 @@ $exe = "$PWD\src-tauri\target\debug\memory-card.exe"
 
 改动涉及前端 + 脚本，后端与 prompt 未动。重跑 `npx tsc --noEmit`（0 退出）、`pnpm build`（30 modules，247.94 kB / gzip 77.93 kB）。
 
-调试版那五张取证用的是一个**改名的副本 `mc-probe.exe`**（当时用户正开着自己的 `memory-card.exe`）：进程名一样的话 `-ProcessName` 会挑错窗口、`Stop-Process` 也可能误伤。
+前半组是**修改前 / 修改后的对照**，同一个动作：从「历史」点一条已经存在的 `integrity`（它属于「编程通用」）。取证用的是一个**改名的调试副本 `mc-probe.exe`**（当时用户正开着自己的 `memory-card.exe`；进程名一样的话 `-ProcessName` 会挑错窗口、`Stop-Process` 也可能误伤）：
 
 | 文件 | 说明 |
 |---|---|
-| ![切页前](evidence/ui-05-tab-switch-old-bug.png) | 复现 bug 1：结果页正常，此时切走 |
-| ![恢复后](evidence/ui-06-tab-switch-fixed.png) | 修复后：复习 → 取词，**结果、`已有卡 · 复习 1 次`、`更新「编程通用」释义` 全在**，输入框里的 `handle` 也还在 |
-| ![历史点旧](evidence/ui-07-history-action-old.png) | 复现 bug 2：从历史点一条已有卡，底部仍写「存入」 |
-| ![历史点新](evidence/ui-08-history-action-fixed.png) | 修复后：同一动作显示「已更新「编程通用」释义」，输入框 `handle`，卡包 `编程通用` |
-| ![存入目标](evidence/ui-09-save-target-deck.png) | 下拉框停在前端、结果来自编程通用，点存入 → `已存入 编程通用：handle`，**证明存入目标取 `result.deck_id` 而非下拉框** |
-| ![历史布局旧](evidence/ui-10-history-layout-old.png) | 复现显示 bug：卡包名被挤成一列竖排字「编 程 通 用」，整行横向溢出 |
-| ![历史布局新](evidence/ui-11-history-layout-fixed.png) | 修复后：卡包名完整，释义去省略号 |
+| ![切页丢结果·修改前](evidence/ui-05-tab-switch-old-bug.png) | **修改前**切回「取词」看到的东西：输入框回到展开的空态、没有释义、底部动作栏也不在 —— 和刚启动时**长得一模一样**，所以这个 bug 光看画面很难和"本来就没查过"区分开（bug 1） |
+| ![切页丢结果·修改后](evidence/ui-06-tab-switch-fixed.png) | **修改后**：同一串操作之后，`integrity` 的释义、`已有卡 · 复习 0 次`、「更新「编程通用」释义」都还在 |
+| ![历史点选·修改前](evidence/ui-07-history-action-old.png) | **修改前**：从历史点一条**已经有卡**的记录，底部主按钮写的是「存入「编程通用」」（bug 2） |
+| ![历史点选·修改后](evidence/ui-08-history-action-fixed.png) | **修改后**：同一动作变成「更新「编程通用」释义」+「已有卡 · 复习 0 次」，左侧卡包也切成 `编程通用` |
+| ![存入目标](evidence/ui-09-save-target-deck.png) | **存入目标**：卡包下拉框停在「前端」，释义却是按「编程通用」算的；点存入后底部写「已更新「编程通用」· integrity」—— 卡片进的是这条释义的卡包，不是下拉框此刻那个 |
+| ![历史布局·修改前](evidence/ui-10-history-layout-old.png) | **布局 bug（修改前）**：卡包名被释义挤成一列竖排字「编 / 程 / 通 / 用」，整行还横向溢出 |
+| ![历史布局·修改后](evidence/ui-11-history-layout-fixed.png) | **修改后**：卡包名「编程通用」完整一行，省略号落在释义上，一屏能多看两行 |
+
+（`ui-06` 与后面的 `release-04`、`ui-08` 与 `release-03` **逐字节相同** —— 同一份前端产物、同一个确定性画面，一次抓自修复后的调试副本、一次抓自发布 exe。`Get-FileHash` 一样不是抓重了，是画面真的没有差别。）
 
 顺带修掉的历史页布局问题：`.history-def` 是 `nowrap` 的 flex 项，默认 `min-width:auto` 让它撑到 min-content（=整行），被挤扁的反而是旁边的卡包名。给 `.history-def` 补 `min-width:0`、给卡包名补 `flex:0 0 auto` 之后，省略号才落在释义上。
 
