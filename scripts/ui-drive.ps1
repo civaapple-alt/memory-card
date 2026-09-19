@@ -12,6 +12,14 @@
     坐标是相对窗口矩形左上角的（和截图坐标系一致）。
     键入字面英文字符前会检查输入法：目标窗口是中文输入法时直接报错（可 -AssumeEnglishInput 硬发）。
     因为逐字键入会被输入法吞进候选缓冲、内容不会落到输入框，而且失败是静默的。
+
+  两个实测出来的用法（别重复踩）：
+    * 点**按钮**可靠（标签页、动作栏按钮都能点中），但坐标点击**不会**把焦点给 textarea。
+      要往输入框里写东西，用 "点按钮换页 + 把按键拆成多次调用" 更稳。
+    * -Keys 里连发一长串 {TAB} 会掉键（实测发 10 个只落 2 个）。数 TAB 定位焦点不可靠，
+      优先点按钮；确实要用 TAB 就一次调用只发一个。
+    * 坐标用 GetWindowRect（DPI 虚拟化过的）是**故意**的，本进程 DPI-unaware，两边一致；
+      截图不要照抄这套坐标，见 win-shot.ps1。
 #>
 param(
   [Parameter(Mandatory = $true)][string]$ProcessName,
@@ -59,6 +67,9 @@ if ($fg -ne $h) {
 $r = New-Object MC.Win+RECT
 [void][MC.Win]::GetWindowRect($h, [ref]$r)
 
+# 这里**故意**用 GetWindowRect（被 DPI 虚拟化过的坐标），因为本进程 DPI-unaware，
+# SetCursorPos 也会被系统按同样的比例放大回去，两边一致才对得上。
+# 截图不能这么干（见 win-shot.ps1），所以 -Out 走公共实现而不是 CopyFromScreen。
 if ($ClickAt) {
   $parts = $ClickAt.Split(',')
   $x = $r.Left + [int]$parts[0]
@@ -106,14 +117,6 @@ if ($Wheel -ne 0) {
 Start-Sleep -Milliseconds $Wait
 
 if ($Out) {
-  $w = $r.Right - $r.Left
-  $hgt = $r.Bottom - $r.Top
-  $bmp = New-Object System.Drawing.Bitmap $w, $hgt
-  $g = [System.Drawing.Graphics]::FromImage($bmp)
-  $g.CopyFromScreen($r.Left, $r.Top, 0, 0, (New-Object System.Drawing.Size $w, $hgt))
-  $g.Dispose()
-  $full = [System.IO.Path]::GetFullPath($Out)
-  $bmp.Save($full, [System.Drawing.Imaging.ImageFormat]::Png)
-  $bmp.Dispose()
-  "saved $full (${w}x${hgt})"
+  . (Join-Path $PSScriptRoot 'win-shot.ps1')
+  Save-WindowShot $h $Out
 }

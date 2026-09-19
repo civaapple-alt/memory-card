@@ -15,11 +15,13 @@
 
 ## 它长什么样
 
-| 存卡 | 复习 |
+| 取词结果 | 复习评分 |
 |---|---|
-| ![存卡](docs/evidence/save-card.png) | ![复习](docs/evidence/review-new-card.png) |
+| ![取词结果](docs/evidence/ui-02-lookup-result.png) | ![复习评分](docs/evidence/ui-04-review-rating.png) |
 
 释义结果按"先看懂这句话"排：**领域义（在这句话里）** → 在这句话里 / 原文 → 例句 / 常见搭配 → **通用义（对照，弱化收尾）**。模型也会返回"为什么通用翻译会错"，但默认不展示。主操作（存入卡包 / 翻面评分）固定在窗口底部的常驻动作栏，不用滚动去找。
+
+取词页**切到别的标签页再回来，结果还在**（只切显示、不卸载）；如果这个词在当前卡包里已经有卡，底下的主操作会写「更新「卡包」释义」而不是「存入」。两处的现场截图在 [docs/VERIFICATION.md](docs/VERIFICATION.md) §7。
 
 ## 快速开始
 
@@ -51,19 +53,19 @@ pnpm tauri build
 | 产物 | 用途 | 体积 |
 |---|---|---|
 | `src-tauri/target/release/memory-card.exe` | 免安装，双击即跑（仍需 WebView2 Runtime） | 6.5 MB |
-| `src-tauri/target/release/bundle/nsis/memory-card_0.1.0_x64-setup.exe` | 安装包，最小 | 2.3 MB |
-| `src-tauri/target/release/bundle/msi/memory-card_0.1.0_x64_en-US.msi` | MSI，走组策略 / 批量部署 | 3.2 MB |
+| `src-tauri/target/release/bundle/nsis/memory-card_0.1.1_x64-setup.exe` | 安装包，最小 | 2.3 MB |
+| `src-tauri/target/release/bundle/msi/memory-card_0.1.1_x64_en-US.msi` | MSI，走组策略 / 批量部署 | 3.2 MB |
 
 发行包**未做代码签名**，Windows 会弹 SmartScreen 警告 —— 本地自用点"仍要运行"即可。Key 在「设置」页填（双击启动不继承 shell 环境变量，见上）。
 
-打包后把三个产物 + `SHA256SUMS.txt` 复制一份到 `release/0.1.0/`（已 gitignore）—— `target/` 会被 `cargo clean` 清掉，那份是拿来直接发给别人 / 自己双击的。
+打包后把三个产物 + `SHA256SUMS.txt` 复制一份到 `release/<版本>/`（已 gitignore）—— `target/` 会被 `cargo clean` 清掉，那份是拿来直接发给别人 / 自己双击的。当前是 `release/0.1.1/`。
 
 ## 怎么用
 
 * **取词**：把选中的文字**拖进窗口**（放下即查），或选卡包后粘贴 / 输入再按 `Enter`（`Shift+Enter` 换行）。**不需要先选"单词 / 句子"** —— 工具用与拖拽同一个分类器自动判断，整句会连上下文一起送进去。输入框和拖拽共用同一套过滤（路径 / URL / 纯数字 / base64 / 代码行 / 超长 / 中文 只提示、不查）。剪贴板监听**不做** —— 见下方"明确不做"。
 * **入卡**：出结果后按 `Enter`（或点底部动作栏的「存入」），`Esc` 丢弃。卡片词形取模型返回的 lemma，所以 `handle` / `handles` / `handling` 会落成同一张卡；重复入库只更新释义，**复习进度保留**。（`E` 编辑后存入尚未实现 —— 见下方"还没做"。）
 * **复习**：`空格`翻面，`1`–`4` 评分（忘了 / 勉强 / 记得 / 秒答）。忘了的卡 10 分钟后会再来一次。
-* **历史**：搜词或搜释文，点一条即可重新查询。
+* **历史**：搜词或搜释文，点一条即可重新查询 —— 卡包会跟着切成那条记录当时的卡包。
 * **卡包**：建包时要给关键词 —— 没有关键词的卡包等于退回通用词典，界面上会直接拦你。
 
 ## 目录结构

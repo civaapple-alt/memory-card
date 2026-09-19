@@ -77,6 +77,9 @@ export default function App() {
   };
 
   const pickHistory = (item: HistoryItem) => {
+    // 历史条目带着它当时用的卡包，一起切过去：否则会出现"释义是在 A 卡包算的、
+    // 状态栏和卡包下拉却写着 B"，存入也就落到 B 去了。
+    pickDeck(item.deck_id);
     setSeed({
       deckId: item.deck_id,
       term: item.term,
@@ -193,34 +196,46 @@ export default function App() {
           <div className="view center">
             <span className="spinner" />
           </div>
-        ) : tab === "lookup" ? (
-          <LookupView
-            decks={decks}
-            deckId={deckId}
-            onDeckChange={pickDeck}
-            seed={seed}
-            onSaved={safeRefresh}
-          />
-        ) : tab === "review" ? (
-          <ReviewView limit={dailyLimit} onReviewed={safeRefresh} />
-        ) : tab === "history" ? (
-          <HistoryView onPick={pickHistory} />
-        ) : tab === "decks" ? (
-          <DecksView decks={decks} onChanged={safeRefresh} />
         ) : (
-          <SettingsView
-            stats={stats}
-            onSaved={() => {
-              safeRefresh();
-              void (async () => {
-                try {
-                  setDailyLimit((await api.getSettings()).daily_review_limit);
-                } catch {
-                  // 忽略：下次进设置页还会再读一次。
-                }
-              })();
-            }}
-          />
+          <>
+            {/*
+              取词页**常驻挂载**，切标签页只切 display、不卸载。
+              它身上挂着一次已经付过钱的模型结果，卸载即丢失 —— "查完切去复习，回来全空了"
+              就是这么来的。代价是它会在启动时就挂上（它自己不发任何请求），
+              并且要靠 active 让出动作栏和全局键盘（见 useActionBar / 下面的 keydown）。
+
+              其余页反过来：每次进入重新查库才是对的（历史要看到新记录、复习要看到刚到期的卡），
+              所以照旧按需挂载。
+            */}
+            <div hidden={tab !== "lookup"}>
+              <LookupView
+                active={tab === "lookup"}
+                decks={decks}
+                deckId={deckId}
+                onDeckChange={pickDeck}
+                seed={seed}
+                onSaved={safeRefresh}
+              />
+            </div>
+            {tab === "review" && <ReviewView limit={dailyLimit} onReviewed={safeRefresh} />}
+            {tab === "history" && <HistoryView onPick={pickHistory} />}
+            {tab === "decks" && <DecksView decks={decks} onChanged={safeRefresh} />}
+            {tab === "settings" && (
+              <SettingsView
+                stats={stats}
+                onSaved={() => {
+                  safeRefresh();
+                  void (async () => {
+                    try {
+                      setDailyLimit((await api.getSettings()).daily_review_limit);
+                    } catch {
+                      // 忽略：下次进设置页还会再读一次。
+                    }
+                  })();
+                }}
+              />
+            )}
+          </>
         )}
         </main>
       </ActionBarContext.Provider>

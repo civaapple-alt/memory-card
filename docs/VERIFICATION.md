@@ -44,12 +44,24 @@
 
 三个产物都是 PE32+ x64（NSIS 外壳是 32 位存根，属正常），`Get-AuthenticodeSignature` 均为 `NotSigned`。**只验证了独立 exe**：把 cwd 设成不含 `.env` 的临时目录再启动 `target/release/memory-card.exe`，进程存活、窗口标题 `memory-card`、`DwmGetWindowAttribute` 给出 664×977 物理 / 144 DPI(150%) = 440×620 逻辑（与 `tauri.conf.json` 一致），界面完整渲染（五页标签 + 底部状态栏 `23 张卡 · 18 待复习`，见 §4），未配 key 也不崩 —— 说明 `frontendDist` 已被打进二进制、配置确实从 SQLite 读。**MSI 与 NSIS 安装包没有真跑安装**（不在这台机器上装）。
 
+**release 0.1.1 打包复验（同日第二轮，修完 §7 的缺陷之后）**：`Remove-Item Env:CI` 后重跑 `pnpm tauri build`，`Finished release profile in 1m 42s` + `Finished 2 bundles`。产物与哈希：
+
+| 产物 | 字节 | SHA256 |
+|---|---|---|
+| `release/0.1.1/memory-card.exe` | 6,765,568 | `EBEF2518…632ED0` |
+| `release/0.1.1/memory-card_0.1.1_x64_en-US.msi` | 3,375,104 | `B060BEB2…273CF7` |
+| `release/0.1.1/memory-card_0.1.1_x64-setup.exe` | 2,445,182 | `97A0F982…6F1163B1` |
+
+完整值在 `release/0.1.1/SHA256SUMS.txt`（该目录 gitignore，和 `release/0.1.0/` 一样）。三个副本与 `target/` 里的原件逐字节比对通过（`Get-FileHash` 相等）。PE 机器码：`memory-card.exe` = `0x8664`(x64)、NSIS `setup.exe` = `0x014C`(32 位存根，正常)。**更正上一轮的写法**：MSI 不是 PE 文件（它是 OLE 复合文档），上一轮把它也写成"PE32+ x64"是错的。
+
+这一轮**真的把发布版跑起来验了**（不是只 `pnpm tauri dev`）：把 `release/0.1.1/memory-card.exe` 改名成 `mc-rel011.exe` 拷到临时目录（cwd 不含 `.env`）启动，它照常从 `%APPDATA%` 读库（`25 张卡 · 20 待复习`），然后驱动真实窗口走了一遍 §7 的场景 —— 结论：§7 的两个修复**在发布二进制里生效**（见 §7.4 的 `release-02`…`release-04`）。
+
 **UI/交互改版后的复验（同日）**：改版只动前端（`src/App.tsx`、`src/views/*`、`src/styles.css`，以及 `src/dragdrop.ts` 的提示文案），后端与 prompt **未动**。重跑：`npx tsc --noEmit`（通过）、`pnpm build`（通过）、`node --test scripts/check-dragdrop.ts`（7/7 通过）。改版内容 —— 底部常驻动作栏（主操作不再随内容滚动）、取消"单词 / 句子"开关（改由分类器自动判断）、卡包下拉只显名称（领域关键词移到下方一行）、释义按"场景概要 → 细节 → 通用义"重排并默认隐藏 `why_translation_fails`、出结果后收起输入区。已在真实窗口里驱动验证并留下 §4 的四张新截图。
 
 顺手改掉的两个真问题（都是"驱动真实窗口"才暴露的）：
 
 * 出结果后 `Enter` 会抢走焦点所在控件（按钮 / 标签页）的按键 —— 键盘 Tab 到"复习"再按 Enter 变成了入库。已把 `Enter = 主操作` 限制为"焦点不在任何可交互控件上"时生效（`src/views/LookupView.tsx`）。实测：结果页 Tab 到"复习"再 Enter 会正常切页，不会入库。
-* `scripts/shot-window.ps1` 在 150% 缩放下会截错区域/裁掉右下半张图（`GetWindowRect` 给的是 DPI 虚拟化后的坐标，`CopyFromScreen` 也照此裁）。本轮改为用 `DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)` 拿物理尺寸 + `PrintWindow(..., 2)` 截图。**脚本本身尚未修改**（见 §5）。
+* `scripts/shot-window.ps1` 在 150% 缩放下会截错区域/裁掉右下半张图（`GetWindowRect` 给的是 DPI 虚拟化后的坐标，`CopyFromScreen` 也照此裁）。本轮改用 `DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)` 拿物理尺寸 + `PrintWindow(..., 2)` 截图。**脚本本身当时没改**，第二轮已把这段逻辑抽到 `scripts/win-shot.ps1` 并让两个脚本都 dot-source 它（见 §7）。
 
 ## 2. 端到端：16 条命令逐条执行
 
@@ -89,6 +101,8 @@
 | 新卡在复习页显示"上次间隔 0 分钟" | `interval_days` 对未复习过的卡是 0，被当成历史值渲染 | `reps === 0` 时显示"新卡" |
 | 间隔显示成 `1.0 天` | 浮点直接格式化 | 整数不补小数位 |
 
+发布之后用户上手用，又报回两处（外加我自己顺手抓到的第三处），见 **§7**。
+
 ## 4. 证据
 
 截图来自真实窗口，由 `scripts/ui-drive.ps1` 驱动、`scripts/shot-window.ps1` 抓取（只截窗口，不截桌面）。
@@ -114,14 +128,14 @@ release 打包产物的一张（`pnpm tauri dev` 之外的独立进程，cwd 不
 |---|---|
 | ![release 启动](evidence/release-01-launch.png) | `target/release/memory-card.exe` 独立启动：界面完整（不是白窗）、底部状态栏 `23 张卡 · 18 待复习` 说明 SQLite 正常打开、卡包/领域行正常 |
 
-这张**不是** `shot-window.ps1` 抓的 —— 该脚本的 DPI 缺陷见 §5，这里用的内联做法是 `DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)` 取物理框 + `PrintWindow(hwnd, hdc, 2)`（`PW_RENDERFULLCONTENT`，否则 WebView2 会截出空白）。
+这张抓图用的是 `DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)` 取物理框 + `PrintWindow(hwnd, hdc, 2)`（`PW_RENDERFULLCONTENT`，否则 WebView2 会截出空白）—— 曾经是内联写法，现在这段逻辑已经落进 `scripts/win-shot.ps1`，`shot-window.ps1` / `ui-drive.ps1` 都 dot-source 它，两处不会再漂移。
 
 ## 5. 仍未验证 / 仍未实现
 
 **仍未验证**：
 
 * **拖拽取词的端到端驱动**：分类器过滤规则有 `node --test scripts/check-dragdrop.ts` 覆盖，用户也已在真实窗口确认「拖一下即出释义」可用；但尚未用 `scripts/ui-drive.ps1` 留证据截图（§4 的三张截图不含拖拽）。
-* **`shot-window.ps1` 的 DPI 缺陷**：150% 缩放下会截错/裁图（见上）。本轮改用 `DwmGetWindowAttribute` + `PrintWindow` 的内联做法取证，脚本本身**没改**；要长期用应当修脚本。
+* **`scripts/ui-drive.ps1` 的交互限制**（见 §7 末尾）：坐标点击**不会**让输入框获得焦点；`-Keys` 里连续 `{TAB}` 会被丢掉（发 10 次落地约 2 次）。可靠的路径只有两条：点按钮、或往**已经聚焦**的输入框里粘贴 / 打字。这两条都已写进脚本注释。
 * **句子流程 B**：UI 已去掉"单词 / 句子"开关（改由分类器自动判断），但"整句大意 + 难点词列表、逐条入卡"**未实现** —— 句子与单词仍共用同一个单次释义 prompt。抽词质量**没实测**。
 * **几十张卡规模下的复习性能与滚动体验**没压测。
 * **费用**：只在单次查询尺度上看过 token 数，没有按天累计的账。
@@ -156,3 +170,72 @@ $exe = "$PWD\src-tauri\target\debug\memory-card.exe"
 ```
 
 一个会让上面第 3 步白费的坑：**跑过 `cargo test` 之后必须先重新 `pnpm tauri build`**，否则 exe 是编译期指向 `devUrl`(1420) 的那个版本，窗口会直接报 `ERR_CONNECTION_REFUSED`。详见 [DEVELOPMENT.md](DEVELOPMENT.md)。
+
+## 7. 缺陷复修（2026-09-19 第二轮）
+
+第一轮验证是"按 PRD 走一遍"，全绿；这一轮是**用户拿 `release/0.1.0` 双击起来真用**之后报回来的。三个问题都有同一个味道：**页面在动、数据也在，但两者对不上**。
+
+### 7.1 切页丢结果（用户报：切标签页再回「取词」，全空了）
+
+**根因**：`App.tsx` 里五个视图是条件渲染（`tab === "lookup" ? <LookupView/> : …`），切页就是**卸载**。`LookupView` 的 `input` / `result` / `saved` 全在组件局部 state 里 —— 组件没了，状态就没了，回来的是一张崭新的取词页。动作栏是一个副作用注册，组件一卸载它也一起消失。
+
+**修法**：把取词页改成**常驻挂载、只切 `display`**（`<div hidden={tab !== "lookup"}>`，`styles.css` 的 `.content` 补 `[hidden]{display:none}` 防止被自己的 display 规则盖掉）。其余页仍按需挂载 —— 历史必须重新查库才能看到刚存的卡、复习必须重新查库才能看到刚到期的卡，卸载是它们的正确行为，只有取词页的结果没有第二次机会。
+
+常驻的代价是后台页会一直抢动作栏和全局键盘，所以补了一个显式契约：`useActionBar(node, deps, active = true)`，`active` 为假就不注册；取词页的 keydown 监听开头 `if (!active) return`。**没有这一步，在复习页按 `Esc` 会把后台那张取词页的结果清掉** —— 这是改完之后新引入又立刻修掉的问题，试出来的（见 7.4）。
+
+### 7.2 已有卡却说"存入"（用户报：历史点一条，下面还提示存入）
+
+**根因**：后端 `lookup_term` **本来就返回** `existing_in_deck`，前端拿到了却没人用 —— 动作栏文案是写死的「存入「deck」」。于是同一屏上，入卡面板写着"当前卡包已有这个卡"，底下的主按钮却写着"存入"。
+
+**修法**：`const existing = result?.existing_in_deck ?? null;`，有卡时主操作变成「**更新**「deck」释义」，旁边补一句只读的「已有卡 · 复习 N 次」；没卡时还是「存入「deck」」。存完的提示也改成用后端返回的 `saved.deck_name`（JOIN 出来的真值），而不是 `result.deck_name` —— 见 7.3，这两者会不一样。
+
+### 7.3 存进哪个卡包（顺带查出来的第三处）
+
+**根因**：动作栏文案用的是 `result.deck_name`，而 `save()` 用的是 App 那个下拉框的 `deckId` —— 两者可以不同。更麻烦的是这个不同**有实质后果**：`term_key` 里嵌了 `deck_id`，释义又是按卡包关键词算出来的，存到别的卡包既跨了领域、又会多出一张卡。
+
+**修法**：
+
+* `save()` 改为存入 `result.deck_id`（`deps` 收成 `[result, onSaved]`，不再依赖下拉框状态）。
+* 从历史点一条时，`pickHistory` 连卡包一起切（`pickDeck(item.deck_id)`），卡片上下的卡包是一致的。
+
+验证方式：把下拉框留在「前端」、结果却来自「编程通用」，点存入 —— 卡片进了「编程通用」。截图 `ui-09`。
+
+### 7.4 证据（全部来自真实窗口，`mc-probe.exe`）
+
+改动涉及前端 + 脚本，后端与 prompt 未动。重跑 `npx tsc --noEmit`（0 退出）、`pnpm build`（30 modules，247.94 kB / gzip 77.93 kB）。
+
+取证用的是一个**改名的调试副本 `mc-probe.exe`**：用户此刻正开着 `memory-card.exe`，同名的第二个实例会互相干扰（也会抢同一份 SQLite），改名后两者互不影响。
+
+| 文件 | 说明 |
+|---|---|
+| ![切页前](evidence/ui-05-tab-switch-old-bug.png) | 复现 bug 1：结果页正常，此时切走 |
+| ![恢复后](evidence/ui-06-tab-switch-fixed.png) | 修复后：复习 → 取词，**结果、`已有卡 · 复习 1 次`、`更新「编程通用」释义` 全在**，输入框里的 `handle` 也还在 |
+| ![历史点旧](evidence/ui-07-history-action-old.png) | 复现 bug 2：从历史点一条已有卡，底部仍写「存入」 |
+| ![历史点新](evidence/ui-08-history-action-fixed.png) | 修复后：同一动作显示「已更新「编程通用」释义」，输入框 `handle`，卡包 `编程通用` |
+| ![存入目标](evidence/ui-09-save-target-deck.png) | 下拉框停在前端、结果来自编程通用，点存入 → `已存入 编程通用：handle`，**证明存入目标取 `result.deck_id` 而非下拉框** |
+| ![历史布局旧](evidence/ui-10-history-layout-old.png) | 复现显示 bug：卡包名被挤成一列竖排字「编 程 通 用」，整行横向溢出 |
+| ![历史布局新](evidence/ui-11-history-layout-fixed.png) | 修复后：卡包名完整，释义去省略号 |
+
+顺带修掉的历史页布局问题：`.history-def` 是 `nowrap` 的 flex 项，默认 `min-width:auto` 让它撑到 min-content（=整行），被挤扁的反而是旁边的卡包名。给 `.history-def` 补 `min-width:0`、给卡包名补 `flex:0 0 auto` 之后，省略号才落在释义上。
+
+还验到的两点：后台那张取词页的 `Esc` **不会**清掉它的结果（切到复习页按 `Esc`，回取词页结果仍在）；复习页自己的动作栏与评分键没被 `active` 契约弄坏。
+
+**上面这一组验的是调试版（`mc-probe.exe`）。** 光验调试版不够 —— 交付给用户的是发布版，打包配置和优化都可能改变行为。所以把 `release/0.1.1/` 里那个真·发布 exe 也跑了一遍（改名 `mc-rel011.exe`，避开用户自己开着的那个实例，并让它和用户实例共用同一个 `%APPDATA%` 数据库）：
+
+| 文件 | 说明 |
+|---|---|
+| ![发布版启动](evidence/release-02-launch.png) | `release/0.1.1/memory-card.exe` 独立启动（cwd 不含 `.env`）：界面完整、`25 张卡 · 20 待复习` —— 读的是真实数据库 |
+| ![发布版历史点选](evidence/release-03-history-pick.png) | 发布版里从历史点一条：结果出来（右上角`缓存`，说明命中 `def_cache`、没花钱）、底部写「已有卡 · 复习 0 次」+「更新「编程通用」释义」、左下角卡包跟着变成`编程通用` |
+| ![发布版切页](evidence/release-04-tab-switch-fixed.png) | 发布版里切到`复习`再切回`取词`：**结果原封不动还在** |
+
+这三张里没有任何键入动作 —— 是**从历史点一条**触发的查询。这也是被逼出来的：驱动脚本点文本框**不会**把焦点给它（见 7.5），所以"打字进输入框"这条路走不通，改用"点一条历史记录"绕开键盘。副作用是这条路同时把 7.2 / 7.3 一起验了。
+
+### 7.5 修 bug 时踩到的取证工具问题
+
+* `shot-window.ps1` 的 DPI 缺陷**这次真修了**：抽成 `scripts/win-shot.ps1`（`DwmGetWindowAttribute` 物理框 + `PrintWindow(...,2)` + `IsIconic` 守卫 + 采样 8 像素判断是否白窗），`shot-window.ps1` 与 `ui-drive.ps1` 都 dot-source 它，不再各写一份。
+* `ui-drive.ps1` 的两条限制（本轮实测确认，已写进脚本注释）：**坐标点击不会让输入框获得焦点** —— 不是"间歇性失败"，是点了之后 `-Paste` 十次都不落（点击本身没问题，同一套坐标点标签页每次都对，映射早就校准过）；`-Keys` 里连续 `{TAB}` 会被丢掉（发 10 次大约只落地 2 次）。可靠的做法只剩"点按钮"。**要让它查出东西，别去纠结怎么把字弄进输入框，点一条历史记录就行** —— 取词页的入口本来就有两条，历史点击那条完全不需要键盘。
+* 但"点历史"有个前提：库里得已经有记录。空库上这台机器跑不了纯驱动流程，那一段只能靠人手。
+* 另外 `-ClickAt` 用的是**虚拟化后的** `GetWindowRect` 坐标 —— 这是故意的，因为 `SetCursorPos` 也是 DPI 不敏感的。截图不能照抄这套坐标（见 §5 / 坑 8）。
+
+还有一个**没查清的现象**，记在这里免得下次以为是幻觉：`release/0.1.1` 的 MSI 生成于 23:07:22，`candle`/`light` 之后 5 秒（23:07:27）Application 日志里出现了 `MsiInstaller` 的一条"已安装产品 memory-card 0.1.1，状态 0"。打包器自己不会装东西，当时也没有任何人手工装（机器上 `HKLM` / `HKCU` 的 Uninstall 键里**没有** memory-card 条目，即现在什么都没装上）。同一时间点，用户之前开着的那个 `Downloads\memory-card.exe` 实例也不在了。两件事**可能**相关（安装 MSI 会经 Restart Manager 关掉占用同款 WebView2 的进程），但我没有证据链，不写成结论。教训是实的：**不要在用户正开着应用的数据库上再起一个实例跑验证** —— 要用就等对方没开着，或者先把库复制一份出来用。
+* 版本从 `0.1.0` 抬到 `0.1.1`（`package.json` / `tauri.conf.json` / `Cargo.toml`），好让修好的安装包和用户手上那个区分开。**不需要迁移**：数据在 `%APPDATA%`，identifier 没变。

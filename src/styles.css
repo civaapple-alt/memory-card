@@ -96,6 +96,11 @@ textarea {
   padding: 8px;
 }
 
+/* hidden 属性的兜底：取词页常驻挂载，靠它藏起来（见 App.tsx 的说明）。 */
+[hidden] {
+  display: none;
+}
+
 .statusbar {
   flex: 0 0 auto;
   display: flex;
@@ -613,9 +618,18 @@ button.seg-on {
   align-items: baseline;
 }
 
+/* 卡包名不该被释义挤成一列字（"编 程 通 用"）：它固定宽度，让释义去省略号。 */
+.history-sub > .hint {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .history-def {
   color: var(--dim);
   font-size: 12px;
+  /* 不写 min-width:0 的话，flex 项的 min-width:auto 会按 min-content 撑开，
+     而 nowrap 文本的 min-content 就是整行 —— 下面三行省略号就永远不生效。 */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -730,6 +744,13 @@ button.seg-on {
 
 .action-done {
   padding: 0 2px;
+}
+
+/* 动作栏里的小字说明（例：已有卡 · 复习 3 次）。固定宽度，别被主按钮挤到换行。 */
+.action-note {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: 12px;
 }
 
 /* 卡包选择器下面那行领域关键词：轻，不抢标题。 */

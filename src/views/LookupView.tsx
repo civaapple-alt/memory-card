@@ -18,12 +18,15 @@ export interface LookupSeed {
 type Mode = "word" | "sentence";
 
 export function LookupView({
+  active,
   decks,
   deckId,
   onDeckChange,
   seed,
   onSaved,
 }: {
+  /** 本页当前是否在前台。常驻挂载（切标签页不卸载）时，后台页要让出动作栏和全局键盘。 */
+  active: boolean;
   decks: Deck[];
   deckId: number | null;
   onDeckChange: (id: number) => void;
@@ -108,14 +111,18 @@ export function LookupView({
   };
 
   const save = useCallback(async () => {
-    if (!result || deckId == null) return;
+    if (!result) return;
     setSaving(true);
     setError(null);
     try {
       // 卡片用 lemma 而不是原始输入：handle/handles/handling 才能落成同一张卡。
       const termForCard = (result.definition.lemma || result.term).trim();
+      // 存进**这条释义所属的卡包**（result.deck_id），不是下拉框此刻选中的那个：
+      // 释义是用那个卡包的关键词限定算出来的，塞进别的卡包就串领域了
+      // （term_key 带 deck_id，那会变成另一张新卡）。动作栏上的文案也用的是 result.deck_name，
+      // 两者同源才对得上。
       const card = await api.saveLookup(
-        deckId,
+        result.deck_id,
         termForCard,
         result.sentence,
         result.definition,
@@ -128,16 +135,20 @@ export function LookupView({
     } finally {
       setSaving(false);
     }
-  }, [result, deckId, onSaved]);
+  }, [result, onSaved]);
 
   const d = result?.definition;
   const termForCard = d ? (d.lemma || result!.term).trim() : "";
   const tone = confidenceTone(d?.confidence ?? "");
   const curDeck = decks.find((dk) => dk.id === deckId) ?? null;
   const composing = !result || compose;
+  /** 这个词在 result 所属卡包里已经有卡了 —— 主操作是"更新释义"而不是"存入新卡"。 */
+  const existing = result?.existing_in_deck ?? null;
 
   // D4：出结果后 Enter 直接入库、Esc 丢弃；焦点在输入框里时不拦。
   useEffect(() => {
+    // 后台（被藏起来的）页面不响应键盘 —— 否则在复习页按 Esc 会把取词页的结果清掉。
+    if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       // 焦点在任何可交互控件上时，Enter 交还给该控件（按钮激活、Tab 导航都要它），
@@ -156,23 +167,38 @@ export function LookupView({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [result, saved, saving, save]);
+  }, [active, result, saved, saving, save]);
 
   // D4：主操作进底部常驻动作栏，永远不用滚动去找它。
   useActionBar(
     result ? (
       saved ? (
         <span className="hint action-done">
-          已存入「{result.deck_name}」· {saved.display_term}
+          {/* 落在哪个卡包以后端返回的卡为准（saved.deck_name），不是请求里那个：
+              这句话是在陈述"刚才发生了什么"，万一两者不一致，它必须说实话。 */}
+          {existing ? "已更新" : "已存入"}「{saved.deck_name}」· {saved.display_term}
         </span>
       ) : (
-        <button className="primary action-primary" onClick={save} disabled={saving}>
-          {saving ? <Spinner /> : null}
-          {saving ? "入库中…" : `存入「${result.deck_name}」`}
-        </button>
+        <>
+          {/* 卡已经存在时，光写"存入"是在骗人 —— 写清楚这一步实际发生了什么。 */}
+          {existing && (
+            <span className="hint action-note">
+              已有卡 · 复习 {existing.reps} 次
+            </span>
+          )}
+          <button className="primary action-primary" onClick={save} disabled={saving}>
+            {saving ? <Spinner /> : null}
+            {saving
+              ? "入库中…"
+              : existing
+                ? `更新「${result.deck_name}」释义`
+                : `存入「${result.deck_name}」`}
+          </button>
+        </>
       )
     ) : null,
-    [result, saved, saving, save],
+    [result, saved, saving, save, existing],
+    active,
   );
 
   return (
@@ -280,7 +306,7 @@ export function LookupView({
               )}
               {saved && (
                 <Notice tone="info">
-                  已存入 <b>{result.deck_name}</b>：{saved.display_term}
+                  {existing ? "已更新" : "已存入"} <b>{saved.deck_name}</b>：{saved.display_term}
                   {saved.due_at <= nowSec()
                     ? "（现在就可以复习）"
                     : `（${fmtDue(saved.due_at)}复习）`}
