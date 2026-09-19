@@ -49,7 +49,8 @@ cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
 | `src-tauri/src/srs.rs` | SM-2，纯函数、无 IO —— 所以能干净地单测 |
 | `src-tauri/src/models.rs` | 前后端共用的序列化模型 |
 | `src-tauri/src/error.rs` | `AppError`，前端拿到的是字符串 |
-| `src/App.tsx` | 外壳：五个标签页 + 全局刷新 |
+| `src/App.tsx` | 外壳：五个标签页 + 全局刷新 + 全局拖拽放置区 |
+| `src/dragdrop.ts` | 拖入内容判断：纯函数 `classifyDrop` / `readDropText`，测试在 `scripts/check-dragdrop.ts` |
 | `src/api.ts` | `invoke` 封装 —— **所有命令名只在这里出现** |
 | `src/types.ts` | 与 `models.rs` 一一对应的类型 |
 | `src/format.ts` | 时间 / 间隔 / 置信度的显示格式 |
@@ -80,6 +81,7 @@ cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
 * **不做剪贴板监听**（PRD §2 非目标，2026-09-18 决定）。不要引入 `tauri-plugin-clipboard-manager`，也不要写轮询剪贴板变化的循环。产品取词只有两条路：拖拽入窗 + 手动粘贴。
 * **不需要全局热键，也不需要模拟按键（SendInput）**。两条路都不模拟用户输入：一条靠拖拽事件，一条靠用户在输入框里自己粘。同样是刻意选的，不是还没做。
 * 托盘：`Cargo.toml` 里开着 `tray-icon` feature 但没有代码。真要加，连着 PRD §6 的"托盘显示待复习数"一起做，别只开开关。
+* **`tauri.conf.json` 的 `dragDropEnabled` 保持 `false`。** 拖拽取词依赖 WebView 的 HTML5 拖拽事件（`src/App.tsx` 挂在 window 上、`src/dragdrop.ts` 判内容）；改成 `true` 会让 Tauri 原生接管文件拖拽、文本拖拽事件收不到，功能**静默失效**。
 
 ## 这台机器上的坑
 
@@ -105,3 +107,4 @@ cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
 | `cargo-run.ps1` | 后台跑一次 cargo 任务，全部输出落日志 | 首次编译远超 120s 的命令超时上限。`-Task test` / `-Task check`，之后 `Get-Content .cargo-out.log -Tail N` 轮询。`cargo-run.cmd` 是给 cmd 用的薄包装 |
 | `ui-drive.ps1` | 驱动真实窗口：激活、粘贴、点击、发按键（发之前断言前台窗口） | 没有人手时跑端到端流程。`-ClickAt "200,213"` 坐标相对窗口左上角；`-Paste` 走剪贴板；`-Wait` 毫秒；`-Out` 顺带截图 |
 | `shot-window.ps1` | 只截指定进程的顶层窗口，不截整个屏幕 | 需要视觉证据、又不想把用户桌面拍进去 |
+| `check-dragdrop.ts` | 拖入分类器的单元测试，`node --test scripts/check-dragdrop.ts`（Node 24 原生跑 TS，不引测试框架） | 改了 `src/dragdrop.ts` 的规则之后 |
