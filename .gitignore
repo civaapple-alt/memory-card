@@ -31,6 +31,9 @@ dist-ssr
 # Rust / Tauri build output
 src-tauri/target
 
+# 打包产物副本（target/ 会被 cargo clean 清掉，这里放一份好找的）
+release
+
 # Local database
 *.db
 *.db-wal
