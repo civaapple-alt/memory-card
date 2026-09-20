@@ -31,9 +31,14 @@ npx tsc --noEmit                          # 前端类型检查
 cd src-tauri
 cargo test                                # 单元测试（SM-2 + prompt 构造）
 cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
+
+# 离线复现"卡住 / 响应被截断 / 401"：假模型 + 应用指过去（不花 token）
+node scripts/fake-llm.mjs --port 8787 --mode hang
 ```
 
 `live_llm` 在没配 key 时自动跳过，所以无脑跑 `cargo test` 是安全的。加 `--nocapture` 才看得到 `[live] handle -> ...` 那两行输出（含耗时和 token 数）。
+
+`llm.rs` 里的取消/超时/重试那几个测试**不需要网**：它们在 `127.0.0.1` 上起一个按剧本说话的假服务器（见 `llm.rs` 的 `fake_server`），所以"卡住 30 秒"这种用例也是毫秒级跑完的。
 
 ## 配置优先级
 
@@ -45,9 +50,9 @@ cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
 
 | 文件 | 管什么 |
 |---|---|
-| `src-tauri/src/lib.rs` | Tauri 命令层（16 条）、配置优先级、`def_cache` 读写、复习批次调度 |
+| `src-tauri/src/lib.rs` | Tauri 命令层（18 条）、配置优先级、`def_cache` 读写、复习批次调度、在跑的查询登记与取消（`cancel_lookup`） |
 | `src-tauri/src/db.rs` | schema、种子数据、迁移 |
-| `src-tauri/src/llm.rs` | prompt 构造、前缀缓存键、`define()`（含空返回重试） |
+| `src-tauri/src/llm.rs` | prompt 构造、前缀缓存键、`define()`（含重试 / 超时 / 取消）、`ping()`（连通性测试） |
 | `src-tauri/src/srs.rs` | SM-2，纯函数、无 IO —— 所以能干净地单测 |
 | `src-tauri/src/models.rs` | 前后端共用的序列化模型 |
 | `src-tauri/src/error.rs` | `AppError`，前端拿到的是字符串 |
@@ -68,6 +73,7 @@ cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
 1. **prompt 前缀必须字节不变、且永远排在前面。** 前缀缓存按字节逐前缀匹配。固定前言 + 卡包作用域消息必须原样、有序、在最前，用户输入永远在最后。破坏它 → 缓存全失效，输入侧延迟和价格差 50 倍（缓存命中价是未命中的 1/50）。
 2. **改了 prompt 文本就要 bump `llm.rs::PROMPT_VERSION`。** 它参与 `def_cache` 的键；不 bump 会让旧释义被当成新 prompt 的产物复用。
 3. **`save_lookup` 必须保持 `ON CONFLICT(term_key) DO UPDATE` 只更新 `primary_definition_id` / `display_term`。** 绝不能顺手把 `due_at` / `reps` / `interval_days` 覆盖回去 —— 那等于"重复查一个词就清空它的复习进度"。
+4. **总超时只有一个来源：`LlmConfig.timeout`**（设置页可改，`define` / `ping` 里的 `select!` 负责执行）。别在 `reqwest::Client` 上再设一个 `ClientBuilder::timeout`：那会变成"设置页改了也不生效"的隐形天花板 —— 45 秒那条老 bug 就是这么来的。传输层错误要跟着重试（用户报的 `error decoding response body` 就是这一类）。
 
 ### UI 契约（小窗是硬约束）
 
@@ -78,17 +84,20 @@ cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
 * **取词页常驻挂载，切标签页只切 `display`、不卸载**（`App.tsx` 里那个 `hidden={tab !== "lookup"}`）。它身上挂着的是"已经付过钱的那次模型结果"，卸载就没了 —— 曾经的 bug 就是"查完切去复习，回来一片空白"。代价是它必须在后台让出**动作栏**和**全局键盘**：`useActionBar(node, deps, active)` 的第三个参数、以及 `LookupView` 里 keydown 开头的 `if (!active) return`，都是在干这个，删了就会出现"在复习页按 Esc 清掉了取词页的结果"。其余页照旧按需挂载（每次进入重新查库才是对的：历史要看到新记录、复习要看到刚到期的卡）。
 * **主操作文案必须说真话。** 这个词在卡包里**已有卡**时，主操作是「更新「X」释义」而不是「存入」；存完的提示用**后端返回的 `saved.deck_name`**，不要用请求里的 `result.deck_name` —— 卡落在哪个卡包以数据库为准。
 * **存入的目标是 `result.deck_id`，不是下拉框此刻选中的那个卡包。** 释义是用那个卡包的关键词限定算出来的，`term_key` 又带 `deck_id`，塞进别的卡包就同时犯了"串领域"和"另建一张卡"两个错。历史条目同理：点它会连卡包一起切过去。
+* **查词必须随时能停。** 「停止」（以及查询中的 `Esc`）走 `api.cancelLookup(requestId)`，后端按 `request_id` 取消**那一次**请求。`requestId` 每次查词都要新生成（`newRequestId()`）：复用固定值会把"停止后马上换个词再查"的第二枪一起打死。停止时前端先作废自己的 token 再通知后端 —— 迟到的响应不许再改界面，后端那次 reject（`已停止`）也不该弹成红色错误条。
+* **超时要说实话。** 界面上的"最长等 N 秒"来自 `getSettings().timeout_secs`（后端已 clamp 到 5–300），不要在前端另写一个数字：两处一旦分叉，用户看到的最长等待就成了假的。
 
 ### 改坏了会直接报错
 
-4. **命令参数名在 JS 侧是 camelCase。** Tauri 的 `tauri-macros` 默认 `ArgumentCase::Camel`，所以前端传 `deckId` / `cardId` / `elapsedMs` / `sourceHint`；但**结构体内部的字段名保持 snake_case**。两种风格混用是最常见的低级报错来源。
-5. **`reqwest` 必须显式启用 `native-tls`。** 见「坑 1」，别为了"现代化"换回 rustls。
-6. **`lookup_term` 里的 mutex 必须在 `await` 之前释放**，否则并发查询会退化成串行。
-7. **`term_key = "{normalized_term}|{deck_id}"`。** 同一个词在两个卡包是两张独立的卡（有意为之）。改这个格式等于让所有老卡失联。
+5. **命令参数名在 JS 侧是 camelCase。** Tauri 的 `tauri-macros` 默认 `ArgumentCase::Camel`，所以前端传 `requestId` / `deckId` / `cardId` / `elapsedMs` / `sourceHint`；但**结构体内部的字段名保持 snake_case**。两种风格混用是最常见的低级报错来源。
+6. **`reqwest` 必须显式启用 `native-tls`。** 见「坑 1」，别为了"现代化"换回 rustls。
+7. **`lookup_term` 里的 mutex 必须在 `await` 之前释放**，否则并发查询会退化成串行。同理，查词登记表（`AppState::lookups`）也只做"取/存一个令牌"这种事，别在持锁时 `await`。
+8. **`lookup_term` 要成对地用 `register_lookup` / `finish_lookup`。** 漏了注销只是让表里多一条（有 TTL 兜着），但漏了登记就等于「停止」按钮点了没反应 —— 而且不报错。
+9. **`term_key = "{normalized_term}|{deck_id}"`。** 同一个词在两个卡包是两张独立的卡（有意为之）。改这个格式等于让所有老卡失联。
 
 ### 已经删掉的，别加回来
 
-8. `srs::should_suspend` 已删除。逾期休眠由 `lib.rs` 里一条批量 UPDATE 统一执行，不要在单卡路径里重新加一份判断。
+10. `srs::should_suspend` 已删除。逾期休眠由 `lib.rs` 里一条批量 UPDATE 统一执行，不要在单卡路径里重新加一份判断。
 
 ### 范围约束（别顺手加回来）
 
@@ -115,6 +124,10 @@ cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
 8. **150% 缩放下不要用 `GetWindowRect` + `CopyFromScreen` 截窗口。** pwsh 是 DPI-unaware 进程，`GetWindowRect` 返回的是**虚拟化过的**坐标（664×977 物理的窗口报成 455×657），拿它去 `CopyFromScreen` 就会截偏、裁掉右下角。截窗口一律走 `scripts/win-shot.ps1`：`DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)` 取物理框 + `PrintWindow(..., PW_RENDERFULLCONTENT=2)`（flag 必须带 2，否则 WebView2 是空白）。
    反过来，`ui-drive.ps1` 里的**点击**坐标是**故意**用虚拟化坐标算的：本进程同样 DPI-unaware，`SetCursorPos` 会被系统按同一比例放大回去，两边一致才对得上。别把点击一起"修"了。
 9. **验证时不要和用户正开着的实例共用同一个数据库。** 所有实例都读 `%APPDATA%\memorycard\memory-card\data\memory-card.db`，你起的那个会往里面写历史记录和释义缓存 —— 用户下次刷新就会看到一堆自己没查过的词。更糟的是分不清"用户那边为什么退了"这类问题（有一次把打包出来的 MSI 生成完，用户的实例恰好不在进程表里，无法归因）。要跑真实流程，先把 `data\` 整个复制出来、让它用那份库；或者干脆等人不在了再跑。另外**别用 `memory-card.exe` 这个名字起新实例** —— 和用户手上那个的进程名一模一样，`-ProcessName` 会挑错窗口、`Stop-Process` 也可能误伤。改名成 `mc-xxx.exe` 再跑（`target/release/memory-card.exe` 的 PE 资源不受改名影响）。
+10. **这台机器有 `HTTP_PROXY=http://127.0.0.1:7890`（Clash），`reqwest` 会照用 —— 它读环境变量，Windows 的 IE 代理设置也就算了，环境变量它认。**
+    * 从终端启动的实例会走代理，从资源管理器双击启动的不走（桌面应用不继承 shell 环境变量，和「坑 2」是同一件事的两面）。所以会出现"命令行里跑得好好的、双击就换一种坏法"。
+    * 代理改写或掐断响应时，用户看到的是 `error decoding response body` 这类**解码**错误。第一次跑本机假服务器测试时就是这样：假服务器收下连接不说话，Clash 替它回了 `HTTP 502`，看起来像我们自己的 bug。**先确认是不是代理干的**，别一头扎进重试逻辑。排除办法：`$env:NO_PROXY='127.0.0.1,localhost'`。
+    * `llm.rs` 的单元测试用 `.no_proxy()` 建客户端就是这个原因（否则测的是代理）。但**生产代码要保留代理支持** —— 用户可能真需要它，只让测试绕开。
 
 ## scripts/
 
@@ -126,3 +139,4 @@ cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
 | `shot-window.ps1` | 只截指定进程的顶层窗口，不截整个屏幕 | 需要视觉证据、又不想把用户桌面拍进去 |
 | `win-shot.ps1` | 截窗口的公共实现（DWM 物理框 + `PrintWindow`），给上面两个脚本 dot-source | 不要在别处另写一份截窗口代码：见「坑 8」，写错的那个版本会静默截偏 |
 | `check-dragdrop.ts` | 拖入分类器的单元测试，`node --test scripts/check-dragdrop.ts`（Node 24 原生跑 TS，不引测试框架） | 改了 `src/dragdrop.ts` 的规则之后 |
+| `fake-llm.mjs` | 本机假模型：`--mode hang`（收下连接永不回话）/ `truncate`（声明 200 字节只给 20 字节）/ `unauthorized` / `ok` | 复现"卡住、被截断、401"这类故障，以及验证「停止」「超时」「测试连接」。真 API 平时是好的，复现不出来也不该为它花钱 |

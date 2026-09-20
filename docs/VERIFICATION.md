@@ -1,8 +1,8 @@
 # 验证记录
 
-最后验证：2026-09-19（v0.1 骨架期；补记拖拽取词；补记 UI/交互改版；补记 release 打包；补记第二轮缺陷复修 + 0.1.1 打包复验）
+最后验证：2026-09-20（第三轮：请求可控 —— 查询可停止 / 超时可配置 / 设置页连通性测试；见 §8。此前：v0.1 骨架期；拖拽取词；UI/交互改版；release 打包；第二轮缺陷复修 + 0.1.1 打包复验）
 
-**结论**：取词 → 域释义 → 入卡 → 复习 → 历史 全链路在**真实窗口**里跑通；后端 16 条命令逐条执行过；自动化测试全绿、0 warning。
+**结论**：取词 → 域释义 → 入卡 → 复习 → 历史 全链路在**真实窗口**里跑通；后端 18 条命令逐条执行过；自动化测试全绿、0 warning。第三轮补的三件事（停止 / 超时 / 连通性测试）也在真实窗口里驱动验过 —— 但**只用本机假模型验的**，真 API 上的取消没试过，限定条件写在 §5。
 
 **取词两条路径**：手动粘贴（已实现、已验证）与拖拽入窗（**已实现**，分类器有单元测试覆盖，用户已在真实窗口确认「放下即查」可用）。剪贴板监听仍按 PRD §2 非目标不做。
 
@@ -15,7 +15,7 @@
 
 | 命令 | 结果 |
 |---|---|
-| `cargo test`（src-tauri） | **10 个单元测试通过**（SM-2 调度 + prompt 构造），0 failed，0 warning |
+| `cargo test`（src-tauri） | **17 个单元测试通过**（SM-2 调度 + prompt 构造 10 个；第三轮新增 7 个：取消 / 超时 / 传输层错误重试 / `ping` 成功 / `ping` 报 401 / 已取消的令牌不碰网络 / 超时值两端 clamp），0 failed，0 warning。其中 6 个在本机 127.0.0.1 上起假服务器，不联网、不花 token |
 | `cargo test --test live_llm -- --nocapture` | **1 个联网集成测试通过**（3.44s） |
 | `npx tsc --noEmit` | 通过 |
 | `pnpm build`（vite） | 通过 |
@@ -134,8 +134,11 @@ release 打包产物的一张（`pnpm tauri dev` 之外的独立进程，cwd 不
 
 **仍未验证**：
 
+* **真 API 上的「停止」没按过**（第三轮新增，见 §8）：取消 / 超时 / 测试连接三件事全部是对着 `scripts/fake-llm.mjs`（`127.0.0.1:8787`）验的。取消的机制是"丢掉 future = 丢掉连接"，跟服务端是谁无关；但要真按一次，得把真 key 填进界面、再抓准 2–10 秒的响应窗口，没做。
+* **用户截图里的 `error decoding response body` 只被"像"地复现过**：`--mode truncate` 能让应用走进同一条传输层解码失败的分支（并重试到 2/2 次），但当时那份报文没抓到。本机代理（坑 10）是头号嫌疑，**没有证据链**。
+* **第三轮验证没花 API 钱，但这不是"记账"记出来的**：假服务器不往外发请求，所以那几十次查询确实是 0 费用；"总共花了多少"仍然只有单次查询的 token 数，没有按天累计的账。（再说一遍：`cargo test` 的 6 个假服务器测试也是 0 费用、毫秒级。）
 * **拖拽取词的端到端驱动**：分类器过滤规则有 `node --test scripts/check-dragdrop.ts` 覆盖，用户也已在真实窗口确认「拖一下即出释义」可用；但尚未用 `scripts/ui-drive.ps1` 留证据截图（§4 的三张截图不含拖拽）。
-* **`scripts/ui-drive.ps1` 的交互限制**（见 §7 末尾）：坐标点击**不会**让输入框获得焦点；`-Keys` 里连续 `{TAB}` 会被丢掉（发 10 次落地约 2 次）。可靠的路径只有两条：点按钮、或往**已经聚焦**的输入框里粘贴 / 打字。这两条都已写进脚本注释。
+* **`scripts/ui-drive.ps1` 的交互限制**（§7 末尾 + §8 末尾）：坐标点击**不会**让多行 `textarea` 获得焦点（§7 的结论）；但**单行 `input` 是可以的** —— 第三轮就是用"点一下 `input` → `^{a}` → `-Paste`"把「请求超时」改成 5 的。另外 `-Keys "{ENTER}"` **不激活按钮**（对着按钮发回车，界面毫无反应，看着像保存失败），要点按钮就点它的坐标。`-Keys` 里连续 `{TAB}` 会被丢掉（发 10 次落地约 2 次），要 TAB 就一次只发一个。这些都已写进脚本注释。
 * **句子流程 B**：UI 已去掉"单词 / 句子"开关（改由分类器自动判断），但"整句大意 + 难点词列表、逐条入卡"**未实现** —— 句子与单词仍共用同一个单次释义 prompt。抽词质量**没实测**。
 * **几十张卡规模下的复习性能与滚动体验**没压测。
 * **费用**：只在单次查询尺度上看过 token 数，没有按天累计的账。
@@ -167,6 +170,15 @@ pnpm tauri build --debug --no-bundle
 # 注意：必须传仓库根作 cwd，否则 dotenvy 找不到 .env
 $exe = "$PWD\src-tauri\target\debug\memory-card.exe"
 ([wmiclass]'Win32_Process').Create($exe, $PWD.Path, $null)
+
+# 4. 离线复现"卡住 / 超时 / 停止 / 401 / 测试连接"（不联网、不花 token）
+node scripts/fake-llm.mjs --port 8787 --mode hang      # 只收不答；还有 truncate / unauthorized / ok
+Copy-Item $exe .verify\mc-verify.exe                   # 改名：别和用户手上那个同名（坑 9）
+$env:NO_PROXY = '127.0.0.1,localhost'                  # 否则 Clash 会把本机请求转走（坑 10 / §8.5）
+$env:MEMORY_CARD_DB = "$PWD\.verify\fake.db"           # 独立库，不碰 %APPDATA% 那份
+$env:DEEPSEEK_BASE_URL = 'http://127.0.0.1:8787'
+([wmiclass]'Win32_Process').Create("$PWD\.verify\mc-verify.exe", $PWD.Path, $null)
+# 之后用 scripts\ui-drive.ps1 -ProcessName mc-verify 驱动真实窗口（-ClickAt 点按钮最可靠）
 ```
 
 一个会让上面第 3 步白费的坑：**跑过 `cargo test` 之后必须先重新 `pnpm tauri build`**，否则 exe 是编译期指向 `devUrl`(1420) 的那个版本，窗口会直接报 `ERR_CONNECTION_REFUSED`。详见 [DEVELOPMENT.md](DEVELOPMENT.md)。
@@ -241,3 +253,86 @@ $exe = "$PWD\src-tauri\target\debug\memory-card.exe"
 * 版本从 `0.1.0` 抬到 `0.1.1`（`package.json` / `tauri.conf.json` / `Cargo.toml`），好让修好的安装包和用户手上那个区分开。**不需要迁移**：数据在 `%APPDATA%`，identifier 没变。
 
 还有一条**没查清的现象**，记在这里免得下次以为是幻觉。`release/0.1.1` 的 MSI 生成于 23:07:22；5 秒后的 23:07:27，Application 日志出现 `MsiInstaller` 的"已安装产品 memory-card 0.1.1，状态 0"。打包器自己不会装东西，那个时间点也没有人手工装过 —— 而现在机器上 `HKLM` / `HKCU` 的 Uninstall 键里**没有** memory-card 条目，也就是说此刻什么都没装上。同一时间点前，用户开着的那个 `Downloads\memory-card.exe` 实例也不在进程表里了。两件事**可能**相关（安装 MSI 会经 Restart Manager 关掉占用同款 WebView2 的进程），但我没有证据链，所以不写成结论。能确定的只有两点：**(1) 现在没有安装态残留；(2) 不该在用户正开着应用时再起实例去共用数据库**（坑 9）。
+
+## 8. 第三轮：请求可控（2026-09-20）
+
+用户报的三件事（带两张截图）：查询会卡住/超时、**没有手动停止的地方**（截图里的错误是 `error decoding response body for url https://api.deepseek.com/chat/completions`）、设置页的模型配置**没有连接测试**、以及需要一个能**防止请求拖太久**的东西（也就是可配置超时）。
+
+### 8.1 根因（读代码读出来的，不是猜的）
+
+| 症状 | 根因 | 位置 |
+|---|---|---|
+| 卡住时只能重启 | 前端只有"忽略过期结果"的 `abortRef`，请求在 Rust 侧照跑到底；压根没有取消通道 | `LookupView.tsx` |
+| `error decoding response body` 直接冒到界面上 | 传输层错误（`send()` / `text()` 失败）用 `?` 直接上抛，**不进重试循环**（当时只对"空 content / 解析失败"重试） | `llm.rs::define()` |
+| 超时改不了 | 45s 硬编码在 `default_client()` 的 `ClientBuilder::timeout` 上，是**客户端级**的、一建用一辈子 | `llm.rs::default_client()` |
+| 没地方验 key | 设置页只有输入框，没有测试按钮 | `SettingsView.tsx` |
+| 和 PRD 对不上 | PRD §9 早写了"设置页可编辑**并测试连通性**"，一直没落地 | `docs/PRD.md` §9 |
+
+### 8.2 修法
+
+后端：
+
+* **取消令牌** `Cancel`（`Arc<AtomicBool>` + `tokio::sync::Notify`；通知用 `notify_one` **保存许可**，避免"先取消、后等待"的竞态）。`define()` / `ping()` 用 `select!`（biased）同时等「取消」和「超时」——**future 被丢掉就是连接被丢掉**，这是"停止"能立刻生效、而不是等服务端回话的原因。
+* **超时**从客户端级移进 `LlmConfig.timeout`，含义变成**整次查词的总预算**（5–300s，默认 45，两端 clamp）；`default_client()` 只留 `connect_timeout`（10s）—— 客户端级超时会盖掉设置页改的值，必须让它不存在。
+* **传输层错误进重试**（最多 2 次），错误信息按 `is_timeout` / `is_connect` / `is_decode` 分类成中文，并带上 `第 N/2 次尝试`。
+* **`ping()`**：一次极短的 chat 请求，**故意不带**查词那套固定前言（免得污染前缀缓存），返回 `{reply, model, elapsed_ms}`。
+* `AppState.lookups: Mutex<HashMap<String, RunningLookup>>`（300s TTL 清理）+ 命令 `cancel_lookup(request_id)` / `test_llm(settings)`；`lookup_term` 多一个 `request_id`。**停止可能比请求先到**，所以"登记 / 结束"必须成对，先到的取消要记账（否则界面停了、后台照样在烧 token）。命令总数 16 → **18**。
+
+前端：
+
+* 查询中按钮变 `查询中 2.0s`，旁边是「**停止**」+ `最长等 Ns，超了自动停 · 也可以按 Esc`；查询中 `Esc` 等于停止；停止后给一条提示条（"服务端可能还在算，但结果不会再进这里"）。
+* 设置页加「请求超时」（5–300）与「测试连接」；成功显示 `连接正常 · {model} · {elapsed}ms · 模型回「pong」`，失败走错误条并把 HTTP 状态与响应体原文摆出来。
+
+**prompt 一个字没动**，所以 `PROMPT_VERSION` 没 bump（前缀缓存的键保持稳定，本地释义缓存不失效）。
+
+### 8.3 自动化测试
+
+`cargo test` 从 10 个涨到 **17 个**（0 failed）。新增 7 个里 6 个在 `127.0.0.1` 上起假服务器（`llm.rs::fake_server`），不联网、不花 token，所以"卡住 30 秒"这种用例是毫秒级跑完的：
+
+| 测试 | 断言什么 |
+|---|---|
+| `cancel_returns_at_once_instead_of_waiting_out_the_budget` | 令牌一按，原本要等满 30s 的查询立刻返回 `Cancelled` |
+| `already_cancelled_token_never_touches_the_network` | 先停后查：假服务器**一次都没被连上**（不是"连上了再断"） |
+| `hung_request_times_out_with_a_readable_message` | 假服务器只收不答 → 到点返回 `Timeout`，文案里带秒数 |
+| `truncated_response_is_retried_then_reported` | 声明 200 字节只给 20 字节 → 重试到 `第 2/2 次` 才报错 |
+| `ping_reports_reply_and_the_model_the_server_actually_used` | 报的是**服务端回显**的模型名，不是我们请求里写的那个 |
+| `ping_surfaces_http_errors_instead_of_pretending_it_connected` | 401 必须报错，不能假装连上了 |
+| `timeout_setting_is_clamped_on_both_ends` | `0 / -5 → 5`（0 秒等于每次都立刻失败）、`99999 → 300`、`45 → 45` |
+
+`cargo test --test live_llm -- --nocapture` 仍然通过（真联网，这一轮跑出来 3.01s）—— 说明改完超时/取消之后，真接口那条路没被弄坏。前端 `npx tsc --noEmit` 与 `pnpm build` 通过，`pnpm tauri build --debug --no-bundle` 通过（出一个用来验真实窗口的 exe）。
+
+### 8.4 真实窗口的验证（三段）
+
+驱动方式：改名的调试副本 `.verify\mc-verify.exe`（**不用** `memory-card.exe` 这名字，见坑 9）+ 独立数据库 `MEMORY_CARD_DB=.verify\fake.db`（不碰用户那份）+ `DEEPSEEK_BASE_URL=http://127.0.0.1:8787`（首次启动种进设置表，指向假模型）+ `NO_PROXY=127.0.0.1,localhost`（见 8.5 第一条）。
+
+**第一段：停止**（假服务器 `--mode hang`，只收不答）
+
+| 文件 | 说明 |
+|---|---|
+| ![查询中](evidence/cancel-01-busy.png) | 查询中：按钮 `查询中 2.0s` + 红色「停止」+ `最长等 45s，超了自动停 · 也可以按 Esc` |
+| ![已停止](evidence/cancel-02-stopped.png) | 点「停止」之后**立刻**回到可输入状态，提示条写"已停止：不再等这次响应了…"。同一轮里假服务器的请求日志显示全程只有 **1 个请求**：没有重试、没有第二个连接 |
+
+**第二段：超时**（同一个假服务器；先用默认 45s，再把设置改成 5s）
+
+| 文件 | 说明 |
+|---|---|
+| ![默认 45s 自动超时](evidence/timeout-01-default-45s.png) | 没动设置时的行为：查询在 **45 秒**时自己停下（截图取在点查询后约 50 秒），文案 `请求超时：45 秒内没有拿到完整响应…`。为了排除"其实是提前拿到了结果"，同一轮在 2.5s / 9.5s / 26.7s 各截了一张，都还停在"查询中" |
+| ![改成 5s 后](evidence/timeout-02-configured-5s.png) | 设置页把「请求超时」改成 5 并保存后，同样的卡住请求在 **5 秒**时自己停下，文案里的秒数跟着变成 5 —— 顺便证明这个值是从设置读的，不是两处硬编码 |
+
+**第三段：连通性测试 + 保存**
+
+| 文件 | 说明 |
+|---|---|
+| ![测试成功](evidence/settings-01-test-ok.png) | `--mode ok` 下点「测试连接」：`连接正常 · fake-model-2026 · 2ms · 模型回「pong」`。模型名是**服务端回显**的 —— 我们请求里写的是 `fake-model`，服务端自报 `fake-model-2026`，界面上显示的是后者 |
+| ![测试失败 401](evidence/settings-02-test-fail-401.png) | `--mode unauthorized`：错误条 `测试连接失败：接口返回 HTTP 401：{"error":{"message":"Authentication Fails"}}` —— 状态码和响应体原文都摆出来了，不是干巴巴一句"连接失败" |
+| ![超时保存](evidence/settings-03-timeout-saved.png) | 「请求超时」填 5 → 点「保存设置」→ 顶部"已保存"。落库的值另外用 `node:sqlite` 直读 `settings` 表确认是 `timeout_secs = 5`；**而且不用重启**：切回取词页，查询中的提示当场从"最长等 45s"变成"最长等 5s" |
+
+三段全部对着**假模型**：不联网、不花 token、也不碰用户正在用的那份数据库。（真 API 上的「停止」因此仍未验证 —— 见 §5 第一条。）
+
+### 8.5 这一轮踩到的取证坑（都不是产品问题）
+
+* **本机 Clash 会把本机请求也转走**：`HTTP_PROXY=http://127.0.0.1:7890` 是进程环境变量，`reqwest` 照用；于是发给 `127.0.0.1:8787` 假服务器的请求被代理接走、替它回了 `HTTP 502`，看起来像"假服务器坏了"。必须 `NO_PROXY=127.0.0.1,localhost`。（同一个坑见 DEVELOPMENT.md 坑 10。）
+* **`-Keys "{ENTER}"` 不激活按钮**：给「保存设置」发回车，界面毫无反应（连提示条都不出现），一度以为保存功能坏了；改成**点它的坐标**立刻就好。报错的是取证工具，不是产品。
+* **提示条会把下面的东西整体推下去**：保存成功后顶部多一条提示条，底下所有控件各下移一行 —— 拿十分钟前的坐标再点「保存设置」，正好点到「测试连接」上。每次动手前重新截一张。
+* **`node -e "..."` 里的反引号会被 pwsh 吃掉**（模板字符串全废）：临时脚本写成 `.verify\dbdump.mjs` 再 `node` 跑它。
+* 不打算发布的验证副本一律丢进 `.verify/`（已 gitignore）：改名 exe、独立 `fake.db`、`dbdump.mjs` 都在那儿。
