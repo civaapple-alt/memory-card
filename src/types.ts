@@ -111,8 +111,19 @@ export interface Settings {
   api_key: string;
   base_url: string;
   model: string;
+  /** 整次查词的总超时（秒）。后端会 clamp 到 5–300，默认 45。 */
+  timeout_secs: number;
   daily_review_limit: number;
   reminder_time: string;
+}
+
+/** `test_llm` 的返回：连通性测试成功时才有。 */
+export interface ConnectionTest {
+  /** 模型回的话（正常是 pong）。 */
+  reply: string;
+  /** 服务端回报的真实模型名 —— 传错模型名时这里会露马脚。 */
+  model: string;
+  elapsed_ms: number;
 }
 
 /** 复习评分，和后端 review_card 的 1..4 对齐。 */

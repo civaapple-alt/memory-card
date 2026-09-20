@@ -4,7 +4,8 @@
 //! 没配 API Key 就直接跳过 —— 不算失败，否则没网/没 key 的人会被卡住。
 //! 跑法（仓库根目录有 .env）：cargo test --test live_llm -- --nocapture
 
-use memory_card_lib::llm::{self, LlmConfig};
+use memory_card_lib::llm::{self, Cancel, LlmConfig};
+use std::time::Duration;
 
 fn config() -> Option<LlmConfig> {
     // 集成测试的 cwd 是 src-tauri，dotenvy 会往上层目录找到仓库根的 .env。
@@ -22,6 +23,7 @@ fn config() -> Option<LlmConfig> {
             .unwrap_or_else(|| "https://api.deepseek.com".to_string()),
         model: pick(&["DEEPSEEK_MODEL", "OPENAI_MODEL"])
             .unwrap_or_else(|| "deepseek-flash".to_string()),
+        timeout: Duration::from_secs(llm::DEFAULT_TIMEOUT_SECS),
     })
 }
 
@@ -41,6 +43,7 @@ async fn live_lookup_is_domain_correct_and_prefix_cache_hits() {
         "handle",
         Some("the runtime hands you a handle that you can await"),
         &keywords,
+        &Cancel::new(),
     )
     .await
     .expect("第一次调用必须成功");
@@ -62,7 +65,7 @@ async fn live_lookup_is_domain_correct_and_prefix_cache_hits() {
 
     // 固定 preamble + 卡包作用域在最前面且字节不变，第二次必须吃到前缀缓存
     //（命中部分按 1/50 计价，这是省钱的全部来源）。
-    let second = llm::define(&client, &cfg, "bounded", None, &keywords)
+    let second = llm::define(&client, &cfg, "bounded", None, &keywords, &Cancel::new())
         .await
         .expect("第二次调用必须成功");
 

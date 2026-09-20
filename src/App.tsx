@@ -28,6 +28,8 @@ export default function App() {
   const [deckId, setDeckId] = useState<number | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [dailyLimit, setDailyLimit] = useState(15);
+  /** 后端每次查词的最长等待（秒），只用于界面上如实显示。 */
+  const [llmTimeout, setLlmTimeout] = useState(45);
   const [seed, setSeed] = useState<LookupSeed | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
   const [booting, setBooting] = useState(true);
@@ -60,6 +62,7 @@ export default function App() {
       try {
         const s = await api.getSettings();
         setDailyLimit(s.daily_review_limit);
+        setLlmTimeout(s.timeout_secs);
       } catch {
         // 设置读不到不致命，用默认值继续。
       }
@@ -215,6 +218,7 @@ export default function App() {
                 onDeckChange={pickDeck}
                 seed={seed}
                 onSaved={safeRefresh}
+                timeoutSecs={llmTimeout}
               />
             </div>
             {tab === "review" && <ReviewView limit={dailyLimit} onReviewed={safeRefresh} />}
@@ -227,7 +231,9 @@ export default function App() {
                   safeRefresh();
                   void (async () => {
                     try {
-                      setDailyLimit((await api.getSettings()).daily_review_limit);
+                      const s = await api.getSettings();
+                      setDailyLimit(s.daily_review_limit);
+                      setLlmTimeout(s.timeout_secs);
                     } catch {
                       // 忽略：下次进设置页还会再读一次。
                     }

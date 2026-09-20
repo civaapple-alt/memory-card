@@ -11,8 +11,9 @@ pub mod models;
 mod srs;
 
 use std::path::PathBuf;
+use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use tauri::{Manager, State};
@@ -30,6 +31,68 @@ pub fn now_ts() -> i64 {
 pub struct AppState {
     pub db: Mutex<Connection>,
     pub http: reqwest::Client,
+    /// 正在跑的查词请求。键是前端给的 `request_id` —— 「停止」靠它精确打中**那一次**，
+    /// 而不是把所有在飞的请求一起掐掉（用户点了停止马上换个词再查，第二枪必须活下来）。
+    lookups: Mutex<HashMap<String, RunningLookup>>,
+}
+
+struct RunningLookup {
+    cancel: llm::Cancel,
+    started: Instant,
+}
+
+/// 登记表里条目的寿命。
+///
+/// `cancel_lookup` 找不到对应请求时会先建一个"已取消"的条目，等那个请求起来自己退出。
+/// 万一前端发了停止却再没有请求起来（或请求早就跑完了），这些条目得能自己烂掉，
+/// 否则这张表会一直长。
+const LOOKUP_REGISTRY_TTL: Duration = Duration::from_secs(300);
+
+impl AppState {
+    /// 这张表没有不变量，锁中毒了也只是"谁还在跑"的历史记录 —— 直接取回内容继续用，
+    /// 不要为此让用户重启应用。
+    fn lookups(&self) -> std::sync::MutexGuard<'_, HashMap<String, RunningLookup>> {
+        self.lookups.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn register_lookup(&self, request_id: &str) -> llm::Cancel {
+        let mut map = self.lookups();
+        map.retain(|_, r| r.started.elapsed() < LOOKUP_REGISTRY_TTL);
+        // 用 or_insert 而不是 insert：停止可能比请求先到（两次 IPC 没有先后保证），
+        // 那种情况下留下的是那个"已取消"的令牌，请求一起来就自己退出。
+        let entry = map
+            .entry(request_id.to_string())
+            .or_insert_with(|| RunningLookup {
+                cancel: llm::Cancel::new(),
+                started: Instant::now(),
+            });
+        entry.started = Instant::now();
+        entry.cancel.clone()
+    }
+
+    fn finish_lookup(&self, request_id: &str) {
+        self.lookups().remove(request_id);
+    }
+
+    /// 返回值 = 是否打中了一个**已经在跑**的请求。
+    /// 没打中就把这次取消记在表里（同上：停止可能比请求先到），所以调用方不需要重试。
+    fn cancel_lookup(&self, request_id: &str) -> bool {
+        let mut map = self.lookups();
+        if let Some(entry) = map.get_mut(request_id) {
+            entry.cancel.cancel();
+            return true;
+        }
+        let cancel = llm::Cancel::new();
+        cancel.cancel();
+        map.insert(
+            request_id.to_string(),
+            RunningLookup {
+                cancel,
+                started: Instant::now(),
+            },
+        );
+        false
+    }
 }
 
 fn lock_err<E>(_: E) -> AppError {
@@ -90,8 +153,49 @@ fn llm_config(conn: &Connection) -> AppResult<llm::LlmConfig> {
         .unwrap_or_else(|| "https://api.deepseek.com".to_string());
     let model = pick("model", &["DEEPSEEK_MODEL", "OPENAI_MODEL"])
         .unwrap_or_else(|| "deepseek-flash".to_string());
+    let timeout_secs = timeout_setting(conn);
 
-    Ok(llm::LlmConfig { api_key, base_url, model })
+    Ok(llm::LlmConfig {
+        api_key,
+        base_url,
+        model,
+        timeout: Duration::from_secs(timeout_secs),
+    })
+}
+
+/// 超时是用户可填的数字（也可能是脏数据），读出来一律过一遍 clamp。
+fn timeout_setting(conn: &Connection) -> u64 {
+    let raw = get_setting(conn, "timeout_secs")
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .unwrap_or(llm::DEFAULT_TIMEOUT_SECS as i64);
+    llm::clamp_timeout_secs(raw)
+}
+
+/// 设置页「测试连接」用的是**表单里此刻的值**，不是已保存的值 —— 否则"改了再试"就试不出东西。
+/// key 为空或还是占位符时，回落到已保存的那把。
+fn llm_config_from_form(state: &AppState, form: &Settings) -> AppResult<llm::LlmConfig> {
+    let conn = state.db.lock().map_err(lock_err)?;
+    let pick = |form_value: &str, key: &str, fallback: &str| -> String {
+        let v = form_value.trim();
+        if !v.is_empty() && v != KEY_PLACEHOLDER {
+            v.to_string()
+        } else {
+            get_setting(&conn, key)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| fallback.to_string())
+        }
+    };
+
+    let api_key = pick(&form.api_key, "api_key", "");
+    if api_key.is_empty() {
+        return Err(AppError::Config("还没有配置 API Key，请在设置里填写".into()));
+    }
+    Ok(llm::LlmConfig {
+        api_key,
+        base_url: pick(&form.base_url, "base_url", "https://api.deepseek.com"),
+        model: pick(&form.model, "model", "deepseek-flash"),
+        timeout: Duration::from_secs(llm::clamp_timeout_secs(form.timeout_secs)),
+    })
 }
 
 fn seed_settings_from_env(conn: &Connection) {
@@ -117,6 +221,9 @@ fn seed_settings_from_env(conn: &Connection) {
     }
     if get_setting(conn, "reminder_time").is_none() {
         let _ = put_setting(conn, "reminder_time", "20:00");
+    }
+    if get_setting(conn, "timeout_secs").is_none() {
+        let _ = put_setting(conn, "timeout_secs", &llm::DEFAULT_TIMEOUT_SECS.to_string());
     }
 }
 
@@ -311,6 +418,22 @@ fn delete_deck(state: State<'_, AppState>, id: i64) -> AppResult<()> {
 #[tauri::command]
 async fn lookup_term(
     state: State<'_, AppState>,
+    request_id: String,
+    deck_id: i64,
+    term: String,
+    sentence: Option<String>,
+) -> AppResult<LookupResult> {
+    // 登记一张"这次请求的取消票"，无论成功、失败还是被取消都要注销，
+    // 所以真正的活放在内层函数里，外面包一层收尾。
+    let cancel = state.register_lookup(&request_id);
+    let outcome = lookup_term_inner(state.inner(), &cancel, deck_id, term, sentence).await;
+    state.finish_lookup(&request_id);
+    outcome
+}
+
+async fn lookup_term_inner(
+    state: &AppState,
+    cancel: &llm::Cancel,
     deck_id: i64,
     term: String,
     sentence: Option<String>,
@@ -342,8 +465,15 @@ async fn lookup_term(
     let (definition, from_cache, elapsed_ms, attempts, usage) = match cached {
         Some(def) => (def, true, 0u64, 0u32, llm::LlmUsage::default()),
         None => {
-            let outcome =
-                llm::define(&state.http, &cfg, &term, sentence.as_deref(), &keywords).await?;
+            let outcome = llm::define(
+                &state.http,
+                &cfg,
+                &term,
+                sentence.as_deref(),
+                &keywords,
+                cancel,
+            )
+            .await?;
             // 写缓存：下次同样输入秒出，且离线也能看。
             if let Ok(conn) = state.db.lock() {
                 let key = llm::cache_key(&norm, deck_id, &keywords, sentence.as_deref());
@@ -692,9 +822,10 @@ fn get_settings(state: State<'_, AppState>) -> AppResult<Settings> {
     let has_key = !val("api_key", "").trim().is_empty();
     Ok(Settings {
         // 不回传明文 key，避免它出现在渲染进程里。
-        api_key: if has_key { "***configured***".into() } else { String::new() },
+        api_key: if has_key { KEY_PLACEHOLDER.into() } else { String::new() },
         base_url: val("base_url", "https://api.deepseek.com"),
         model: val("model", "deepseek-flash"),
+        timeout_secs: timeout_setting(&conn) as i64,
         daily_review_limit: val("daily_review_limit", "15").parse().unwrap_or(15),
         reminder_time: val("reminder_time", "20:00"),
     })
@@ -704,14 +835,32 @@ fn get_settings(state: State<'_, AppState>) -> AppResult<Settings> {
 fn save_settings(state: State<'_, AppState>, settings: Settings) -> AppResult<()> {
     let conn = state.db.lock().map_err(lock_err)?;
     // 前端回传 ***configured*** 表示"不改 key"，别把占位符写进去。
-    if !settings.api_key.trim().is_empty() && settings.api_key != "***configured***" {
+    if !settings.api_key.trim().is_empty() && settings.api_key != KEY_PLACEHOLDER {
         put_setting(&conn, "api_key", settings.api_key.trim())?;
     }
     put_setting(&conn, "base_url", settings.base_url.trim())?;
     put_setting(&conn, "model", settings.model.trim())?;
+    // 存之前 clamp：脏输入（负数、9999999）不许落库，否则下次读出来还得再修一遍。
+    put_setting(
+        &conn,
+        "timeout_secs",
+        &llm::clamp_timeout_secs(settings.timeout_secs).to_string(),
+    )?;
     put_setting(&conn, "daily_review_limit", &settings.daily_review_limit.to_string())?;
     put_setting(&conn, "reminder_time", settings.reminder_time.trim())?;
     Ok(())
+}
+
+#[tauri::command]
+fn cancel_lookup(state: State<'_, AppState>, request_id: String) -> AppResult<bool> {
+    Ok(state.cancel_lookup(&request_id))
+}
+
+#[tauri::command]
+async fn test_llm(state: State<'_, AppState>, settings: Settings) -> AppResult<llm::PingOutcome> {
+    let cfg = llm_config_from_form(state.inner(), &settings)?;
+    // 连通性测试不挂界面上的「停止」：它自己带超时，而且用户点一次就想看结果。
+    llm::ping(&state.http, &cfg, &llm::Cancel::new()).await
 }
 
 #[tauri::command]
@@ -733,7 +882,11 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState { db: Mutex::new(conn), http })
+        .manage(AppState {
+            db: Mutex::new(conn),
+            http,
+            lookups: Mutex::new(HashMap::new()),
+        })
         .setup(move |app| {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_title("memory-card");
@@ -747,6 +900,7 @@ pub fn run() {
             update_deck,
             delete_deck,
             lookup_term,
+            cancel_lookup,
             save_lookup,
             list_cards,
             delete_card,
@@ -755,6 +909,7 @@ pub fn run() {
             review_card,
             reactivate_card,
             get_stats,
+            test_llm,
             get_settings,
             save_settings,
             db_location,

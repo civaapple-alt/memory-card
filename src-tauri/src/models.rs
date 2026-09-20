@@ -142,6 +142,19 @@ pub struct Settings {
     pub api_key: String,
     pub base_url: String,
     pub model: String,
+    /// 整次查词的总超时（秒）。用途与上下界见 `llm::clamp_timeout_secs`。
+    ///
+    /// 带 serde default：老前端（或缓存里的旧页面）回传的对象没有这个字段时，
+    /// 不该让"保存设置"直接失败在反序列化上。
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: i64,
     pub daily_review_limit: i64,
     pub reminder_time: String,
 }
+
+fn default_timeout_secs() -> i64 {
+    crate::llm::DEFAULT_TIMEOUT_SECS as i64
+}
+
+/// `get_settings` 用这个占位符代替明文 key：前端原样回传即表示"不改 key"。
+pub const KEY_PLACEHOLDER: &str = "***configured***";

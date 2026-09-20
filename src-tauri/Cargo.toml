@@ -23,7 +23,8 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time"] }
+# sync：取消令牌用 tokio::sync::Notify，别靠别的 crate 顺带把 feature 打开。
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 anyhow = "1.0.104"
 thiserror = "2.0.20"

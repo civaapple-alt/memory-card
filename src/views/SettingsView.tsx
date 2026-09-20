@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, errText } from "../api";
-import { Field, Panel, Spinner } from "../ui";
-import { KEY_PLACEHOLDER, type Settings, type Stats } from "../types";
+import { Field, Notice, Panel, Spinner } from "../ui";
+import { KEY_PLACEHOLDER, type ConnectionTest, type Settings, type Stats } from "../types";
 
 export function SettingsView({
   stats,
@@ -13,6 +13,8 @@ export function SettingsView({
   const [form, setForm] = useState<Settings | null>(null);
   const [dbPath, setDbPath] = useState("");
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<ConnectionTest | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,6 +37,8 @@ export function SettingsView({
     setBusy(true);
     setError(null);
     setMsg(null);
+    // 这一条测试结论是旧配置的，改完设置就不能再挂在界面上了。
+    setTestResult(null);
     try {
       await api.saveSettings(form);
       setMsg("已保存。API Key 明文存在本机数据库里（本地应用，没有别的选择）。");
@@ -44,6 +48,25 @@ export function SettingsView({
       setError(errText(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  /**
+   * 用表单里**此刻**的值试一次请求 —— 先填 key 再点这一下，通了再保存。
+   * 失败时走错误条：它是"这次没通"，不是"设置坏了"。
+   */
+  const test = async () => {
+    if (!form) return;
+    setTesting(true);
+    setError(null);
+    setMsg(null);
+    setTestResult(null);
+    try {
+      setTestResult(await api.testConnection(form));
+    } catch (e) {
+      setError(`测试连接失败：${errText(e)}`);
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -83,6 +106,21 @@ export function SettingsView({
         <Field label="模型" hint="deepseek-flash">
           <input value={form.model} onChange={(e) => set("model", e.target.value)} />
         </Field>
+        <Field label="请求超时" hint="秒（5–300）；超过就放弃这次查询，不用一直等">
+          <input
+            type="number"
+            min={5}
+            max={300}
+            value={form.timeout_secs}
+            onChange={(e) => set("timeout_secs", Number(e.target.value) || 0)}
+          />
+        </Field>
+        {testResult && (
+          <Notice>
+            连接正常 · {testResult.model} · {testResult.elapsed_ms}ms
+            {testResult.reply ? ` · 模型回「${testResult.reply}」` : ""}
+          </Notice>
+        )}
       </Panel>
 
       <Panel title="复习">
@@ -108,6 +146,12 @@ export function SettingsView({
           {busy ? <Spinner /> : null}
           保存设置
         </button>
+        {/* 先试再存：key/地址写错了不用等到下次查词才发现。 */}
+        <button onClick={test} disabled={busy || testing}>
+          {testing ? <Spinner /> : null}
+          {testing ? "测试中…" : "测试连接"}
+        </button>
+        <span className="hint">测试用表单里此刻的值</span>
       </div>
 
       <Panel title="数据">

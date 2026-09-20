@@ -42,3 +42,6 @@ release
 # 端到端调试留下的临时截图（用 shot-window.ps1 抓的）
 # 长期保留的证据截图放在 docs/evidence/ 下，是要提交的
 .shot-*.png
+
+# 端到端验证的临时目录：假模型 + 临时库 + 这一轮的截图（挑出来进 docs/evidence/）
+.verify/

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, errText } from "../api";
+import { api, errText, newRequestId } from "../api";
 import { useActionBar } from "../actionbar";
 import { classifyDrop } from "../dragdrop";
 import { confidenceTone, fmtDue, nowSec } from "../format";
@@ -24,6 +24,7 @@ export function LookupView({
   onDeckChange,
   seed,
   onSaved,
+  timeoutSecs,
 }: {
   /** 本页当前是否在前台。常驻挂载（切标签页不卸载）时，后台页要让出动作栏和全局键盘。 */
   active: boolean;
@@ -32,16 +33,21 @@ export function LookupView({
   onDeckChange: (id: number) => void;
   seed: LookupSeed | null;
   onSaved: () => void;
+  /** 后端那次查词的最长等待（秒），只用来在界面上说实话。 */
+  timeoutSecs: number;
 }) {
   const [input, setInput] = useState("");
   const [result, setResult] = useState<LookupResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [stopped, setStopped] = useState(false);
   const [saved, setSaved] = useState<Card | null>(null);
   const [saving, setSaving] = useState(false);
   /** 出结果后收起输入区，把屏幕让给释义；点"换个词"再展开。 */
   const [compose, setCompose] = useState(true);
+  /** 正在跑的那次请求的 id：停止按钮靠它精确打中这一次。 */
+  const [requestId, setRequestId] = useState<string | null>(null);
   const abortRef = useRef(0);
 
   const run = useCallback(
@@ -51,14 +57,21 @@ export function LookupView({
         setError("请输入要查询的词或短语");
         return;
       }
+      // 两个身份各管一件事：requestId 给后端（停止按它命中那一次），
+      // token 给这里（认领"过期结果"）。它们的失效时机必须一致 ——
+      // 谁让 token 过期，谁就得负责把那一次后端请求停掉，否则会留下一个没人看的在飞请求。
+      const id = newRequestId();
       const token = ++abortRef.current;
+      setRequestId(id);
       setBusy(true);
+      setStopped(false);
       setError(null);
       setResult(null);
       setSaved(null);
       setElapsed(0);
       try {
         const r = await api.lookupTerm(
+          id,
           useDeckId,
           text,
           useMode === "sentence" ? text : null,
@@ -67,14 +80,29 @@ export function LookupView({
         setResult(r);
         setCompose(false);
       } catch (e) {
+        // 停止之后后端也会 reject 一次（"已停止"），但它同样是过期结果：
+        // 界面在 stop() 里已经说清楚了，再弹一条红色错误条只是噪音。
         if (token !== abortRef.current) return;
         setError(errText(e));
       } finally {
-        if (token === abortRef.current) setBusy(false);
+        if (token === abortRef.current) {
+          setBusy(false);
+          setRequestId(null);
+        }
       }
     },
     [],
   );
+
+  /** 停止这次查词：先作废 token（迟到的响应不许再改界面），再通知后端别再等了。 */
+  const stop = useCallback(() => {
+    const id = requestId;
+    abortRef.current += 1;
+    setBusy(false);
+    setRequestId(null);
+    setStopped(true);
+    if (id) void api.cancelLookup(id).catch(() => {});
+  }, [requestId]);
 
   // 历史里点一条 → 回填并直接查。
   useEffect(() => {
@@ -155,19 +183,24 @@ export function LookupView({
       // 只有焦点落在"空白处"才升级成主操作。
       const interactive =
         !!t && (/^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(t.tagName) || t.isContentEditable);
-      if (e.key === "Enter" && result && !saved && !saving && !interactive) {
+      if (e.key === "Escape" && busy) {
+        // 查询中 Esc = 停止，和「停止」按钮走同一条路径。
+        e.preventDefault();
+        stop();
+      } else if (e.key === "Enter" && result && !saved && !saving && !interactive) {
         e.preventDefault();
         void save();
       } else if (e.key === "Escape") {
         setResult(null);
         setSaved(null);
         setError(null);
+        setStopped(false);
         setCompose(true);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, result, saved, saving, save]);
+  }, [active, busy, result, saved, saving, save, stop]);
 
   // D4：主操作进底部常驻动作栏，永远不用滚动去找它。
   useActionBar(
@@ -204,6 +237,11 @@ export function LookupView({
   return (
     <div className="view">
       {error && <ErrorBar text={error} onClose={() => setError(null)} />}
+      {stopped && (
+        <Notice>
+          已停止：不再等这次响应了。服务端可能还在算，但结果不会再进这里。
+        </Notice>
+      )}
 
       {composing ? (
         <Panel title="取词" actions={<span className="hint">单词 / 句子自动识别</span>}>
@@ -243,7 +281,17 @@ export function LookupView({
               {busy ? <Spinner /> : null}
               {busy ? `查询中 ${(elapsed / 1000).toFixed(1)}s` : "查询"}
             </button>
-            <span className="hint">Enter 查询 · Shift+Enter 换行</span>
+            {/* 卡住的时候，用户最想找的就是这个按钮 —— 它必须一直在，不用滚动、不用猜。 */}
+            {busy && (
+              <button className="danger" onClick={stop}>
+                停止
+              </button>
+            )}
+            <span className="hint">
+              {busy
+                ? `最长等 ${timeoutSecs}s，超了自动停 · 也可以按 Esc`
+                : "Enter 查询 · Shift+Enter 换行"}
+            </span>
           </div>
         </Panel>
       ) : (
