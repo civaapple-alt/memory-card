@@ -766,3 +766,45 @@ button.seg-on {
   user-select: text;
   word-break: break-word;
 }
+
+/* ------------------------------------------------- 补充句子（可选的那一框） */
+
+/* 收起时它只是一行标题 —— 存在感要低，否则用户会以为必须填。 */
+.ctx-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+button.ctx-toggle {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+button.ctx-toggle:hover:not(:disabled) {
+  color: var(--accent);
+  border: 0;
+}
+
+.input-ctx {
+  font-size: 13px;
+  min-height: 34px;
+  resize: vertical;
+}
+
+/* 说明紧贴句子框，别让人以为是下一段的开头。 */
+.ctx-hint {
+  margin-top: -4px;
+  line-height: 1.5;
+}
+
+/* 收起后仍要看得见"这次带着哪句话查的"。 */
+.compact-ctx {
+  margin-top: 4px;
+  line-height: 1.4;
+  word-break: break-word;
+}

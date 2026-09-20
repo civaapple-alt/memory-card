@@ -105,11 +105,18 @@ export default function App() {
         setTab("lookup");
         return;
       }
-      setDropNotice(null);
+      // 拖进来的是一句话：它属于「补充句子」，要查的词还得用户自己说 ——
+      // 以前是拿整句当词交给模型猜，猜错时缓存键和卡片键一起错。
+      const droppedAsSentence = cls.kind === "context";
+      setDropNotice(
+        droppedAsSentence
+          ? "已放进「补充句子」—— 上面写上你要查的那个词，再点查询。"
+          : null,
+      );
       setSeed({
         deckId,
-        term: cls.text,
-        sentence: cls.kind === "sentence" ? cls.text : null,
+        term: droppedAsSentence ? "" : cls.text,
+        sentence: droppedAsSentence ? cls.text : null,
         nonce: Date.now(),
       });
       setTab("lookup");

@@ -3,6 +3,10 @@
  *
  * 顺序（计划 反馈 4 / D2）：场景概要 → 语境（在这句话里 / 原文）→ 例句 / 搭配 → 通用含义（弱化收尾）。
  * 注意：`why_translation_fails` 已按 D2 从默认展示中移除，但数据仍保留在库里，不删字段。
+ *
+ * 「在这句话里」必须挂在 `sentence` 上（计划：词和句子拆成两个输入框）：
+ * 模型无论有没有上下文都会填 `in_context`，无句子时它填的是领域知识 ——
+ * 和上面的 hero 段讲的是同一件事，挂个"这句话"的标签只会让人以为系统读了某句话。
  */
 export function DefinitionBody({
   domainMeaning,
@@ -23,7 +27,7 @@ export function DefinitionBody({
     <>
       <div className="meaning">{domainMeaning || "（模型没给出领域释义）"}</div>
 
-      {inContext && (
+      {sentence && inContext && (
         <div className="block">
           <div className="block-label">在这句话里</div>
           <div>{inContext}</div>

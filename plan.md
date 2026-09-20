@@ -1,82 +1,61 @@
-# 计划：查词可中断 + 超时可配置 + 模型连接测试
+# 计划：把「词」和「句子」拆成两个输入框
 
-用户报的三件事（2026-09-20，附了两张截图）：
+用户报的两件事（2026-09-21，附截图：只查了 `presentation` 一个词，结果里却有一块「在这句话里」）：
 
-1. 查词会卡住/超时，**没有手动停止的地方**（截图 1：`error decoding response body for url https://api.deepseek.com/chat/completions`）。
-2. 设置页的模型配置**没有连接测试**（截图 2）。
-3. 需要**防止请求拖太久**的东西 —— 也就是可配置的超时。
+1. 只查了一个词，释义里却出现「在这句话里」—— 看着像读了某句话，其实没有。
+2. 输入一段话时，没法表达"我要问整段"还是"问段里那个词"。
 
 ## 现状（读代码得到的事实，不是猜测）
 
 | 事实 | 位置 |
 |---|---|
-| 超时是硬编码 45s，且是**客户端级**总超时 | `llm.rs::default_client()` |
-| 传输层错误（`resp.send()` / `resp.text()` 失败）直接 `?` 上抛，**不重试** | `llm.rs::define()` |
-| 前端只有"忽略过期结果"的 `abortRef`，请求在 Rust 侧照跑到底 | `LookupView.tsx` |
-| 设置页只有 API Key / Base URL / 模型 / 复习三项，没有测试按钮 | `SettingsView.tsx` |
-| PRD §9 里写了"设置页可编辑**并测试连通性**" —— 这一条当时没落地 | `docs/PRD.md` |
+| 「在这句话里」只看 `in_context` 非空，不看有没有句子 | `src/views/DefinitionBody.tsx:26` |
+| prompt 把 `in_context` 当必填：格式示例里直接写好了"在这句话里，handler 指…"；全文只有 `why_translation_fails` 写了"不构成误导就留空" | `src-tauri/src/llm.rs:82,88-99` |
+| 无句子时后端是说实话的（`sentence: (无上下文，仅给出该词)`），但模型仍会拿领域知识把 `in_context` 填满 | `src-tauri/src/llm.rs:133` |
+| 句子模式下 `term` 和 `sentence` 传的是**同一个字符串** | `src/views/LookupView.tsx:76-77` |
+| 于是"查句中哪个词"完全由模型猜；缓存键、卡片键也都由这串文本决定 | `src-tauri/src/llm.rs:168-176`、`src-tauri/src/lib.rs:441,452` |
+| 词还是句由**形状**决定（≤3 词且 ≤40 字 = term，否则 sentence），不是意图 | `src/dragdrop.ts:78-82` |
+| 超 300 字、或非空行超 2 行就拒 —— "解释整段"这条路根本不存在 | `src/dragdrop.ts:41-52` |
+| 拖进来的整句也被同时当 term 和 sentence 送出去 | `src/App.tsx:109-114` |
+| 输入区标题写着"单词 / 句子自动识别"，这句话在哪个框上都不成立 | `src/views/LookupView.tsx:247` |
 
 ## 改什么
 
-后端（`llm.rs`）：
+第一层 —— 显示说实话（`src/views/DefinitionBody.tsx`）：
 
-* `Cancel`（`Arc<AtomicBool>` + `tokio::sync::Notify`）取消令牌；`define` / `ping` 用 `tokio::select!`
-  同时等「取消」与「超时」。**future 被丢掉 = 连接被丢掉**，这是停止能真正生效的原因。
-* 超时改成 `LlmConfig.timeout`（来自设置，5–300s，默认 45），作为**整次查词**的总预算，而不是每个 HTTP 请求一份。
-* 传输层错误也进重试循环（原代码只对"空 content / 解析失败"重试），并且错误信息按 `is_connect` / `is_decode` / `is_timeout` 分类成中文。
-* 新增 `ping()`：一次极短的 chat 请求，用来做设置页的连通性测试。
+* 「在这句话里」改成 `sentence && inContext` 才显示。没有句子就不显示 —— 那块内容和 hero 段讲的是同一件事，本来没有独立信息。
+* 复习页共用同一组件（`src/views/ReviewView.tsx:205`），自动一致。
+* 老卡片里存的 `in_context` 一个字节不动（`db.rs` / `lib.rs` 的读写也不动），只是不再显示。
 
-后端（`lib.rs` / `models.rs`）：
+第二层 —— 把词和句子拆成两个输入（`src/views/LookupView.tsx` + `src/dragdrop.ts`）：
 
-* `AppState.lookups: Mutex<HashMap<String, RunningLookup>>`，键是前端给的 `request_id`；
-  `lookup_term` 带 `request_id`，新增命令 `cancel_lookup(request_id)` 与 `test_llm(settings)`。
-* `Settings.timeout_secs`，读出来时 clamp，存进去时也 clamp。
+* 输入区两个框：
+  * 主框 = **要查的词 / 短语**，label 写明，上限收到 term 规则（≤3 词；多词短语再限 40 字，
+    单个词不受这条长度限制 —— 标识符本来就可能很长）。
+  * 「补充句子（可选）」**可展开**：默认收起，展开是一行 textarea（≤300 字、≤4 行）。旁边一句话说清它是干什么的 —— 贴上它出现的原句，释义按这句话解；留空就只按卡包领域解释这个词。
+* **提交时 `term` = 主框，`sentence` = 句子框或 `null`。** 这是根因修复：后端 `build_body(term, sentence, keywords, …)` 本来就是两个参数（`llm.rs:125`），坏的是前端的传法。所以 **prompt 一个字不改、`PROMPT_VERSION` 不 bump、本地释义缓存不失效**。
+* 整句贴进主框不再被静默当成 term：报错并把文本**挪进**「补充句子」（自动展开），提示上面只留要查的词。
+* `classifyDrop` 拆成 `classifyTerm` / `classifyContext`（共用底层规则），`classifyDrop` 保留为"拖进来的东西该落到哪个框"的分派。`scripts/check-dragdrop.ts` 是现成的测试入口，跟着扩用例。
+* 拖拽：短文本 → 主框；长文本 / 多行 → 句子框并自动展开，提示还需写上要查的词（这一条以前是模型替用户猜的，现在改成用户说清）。
+* 历史回填：`LookupSeed.sentence` 非空 → 两框都填 + 自动展开（`src/views/LookupView.tsx:108-112`）。
+* 输入区标题的"单词 / 句子自动识别"删掉，换成说清两个框各是什么。
 
-前端：
+### 一处和 PRD §4.2 的有意偏差
 
-* `LookupView`：查询中按钮变成 `查询中 2.0s`（带转圈），旁边出现「**停止**」+ 一句
-  `最长等 45s，超了自动停 · 也可以按 Esc`；查询中按 `Esc` 等于点「停止」。
-* `SettingsView`：超时输入 + 「测试连接」按钮，显示模型实际回的模型名、耗时与回复。
-* `api.ts` / `types.ts`：新命令与类型；`newRequestId()`。
+句子框**允许代码行**（`const x = 1;` 这类）：句子框存在的意义就是"我是在哪一行看到的"，
+而那一行常常就是源码。词框仍然照旧拦代码 —— 那里的误判代价大得多（会变成卡片键）。
 
 ## 不做
 
-* 不 bump 版本号、不重新打包 release（用户明确说不需要）。
-* 不改 prompt、不改 `PROMPT_VERSION` —— 那会让本地释义缓存全部失效，和这次的事无关。
+* 不解释整段：段落不是一张卡，硬做出来的是不能复习的释义。只在被贴成长文本时给出明确引导。
+* 不改 prompt、不 bump `PROMPT_VERSION`（理由见上）。
+* 不清理存量数据：句子模式留下的旧缓存（norm = 整句）留着无害，新键会绕开；老卡片的 `in_context` 也不再显示。
+* 后端一行不改 —— `lookup_term(request_id, deck_id, term, sentence)` 这个签名本来就是对的。
 
 ## 验收（能自己复现的证据）
 
-1. `cargo test`：新增 4 个**本机假服务器**测试（不联网、不花 token）——
-   卡住的请求能被取消且立刻返回、已经取消的令牌根本不碰网络、卡住的请求会超时并给出可读信息、
-   被截断的响应会重试到 2/2 次、`ping` 能读出模型名与回复、`ping` 会如实报出 401；
-   另加 1 个不联网的纯函数测试（超时值两端 clamp）。
+1. `node --test scripts/check-dragdrop.ts`：新增用例 —— 整句进词框判 `asSentence`、句子框收单句与代码行、超 300 字 / 超 4 行 / 路径 / URL / base64 / 非拉丁各自拦掉。
 2. `npx tsc --noEmit` + `pnpm build`。
-3. 真实窗口：把 Base URL 指向一个本机"只接受不回复"的端口，点查询 → 界面停在"查询中"→ 点停止 → 立刻回到可输入状态；
-   设置页点「测试连接」→ 能看到成功（模型名 / 毫秒 / 回复）或 401 的失败原因；把「请求超时」改成 5 秒保存后，
-   同一个卡住的请求会在 5 秒时**自己**停下并给出提示。留截图。
+3. 真实窗口三段（对本机假模型，不联网不花 token）：① 只填词 → 结果里**没有**「在这句话里」；② 词 + 展开补充句子 → 结果里有「在这句话里」，且「原文」就是补进去的那句；③ 把整句贴进主框 → 被拒 + 文本挪进补充句子。留截图。
 4. 文档同步：README / PRD / DEVELOPMENT / VERIFICATION。
 5. git 提交。
-
-## 做完之后（2026-09-20，实际结果）
-
-三条都落地并在真实窗口验过，证据在 [docs/VERIFICATION.md](docs/VERIFICATION.md) §8、截图在 `docs/evidence/`
-（`cancel-01/02`、`timeout-01/02`、`settings-01/02/03`）。
-
-和计划的两处偏差，按实际写：
-
-1. **只写了 7 个新测试，不是 4 个**。除了计划里的 4 条，又补了两条防回归的：
-   `already_cancelled_token_never_touches_the_network`（先停后查这条路真的不发请求）与
-   `ping_surfaces_http_errors_instead_of_pretending_it_connected`（连通性测试失败必须报错，不能假装通）。
-   `cargo test` 因此从 10 个变成 **17 个**，全绿。
-2. **设置页的「请求超时」改完立刻生效，不用重启**：`App.tsx` 的 `onSaved` 回调会重新拉一次设置，
-   `LookupView` 的提示当场从"最长等 45s"变成"最长等 5s"。这一点是验出来的，不是设计出来的。
-
-另外记两个**取证环境**的坑（都不是产品问题，但会让人白跑一小时）：
-
-* 本机有 `HTTP_PROXY=http://127.0.0.1:7890`（Clash）。`reqwest` 会读它，把发给 `127.0.0.1:8787` 的假服务器请求
-  也转给代理，回一个 502 —— 表现成"假服务器坏了"。驱动应用时要么加 `NO_PROXY=127.0.0.1,localhost`，
-  要么让假服务器自己 `.no_proxy()`（测试里就是这么做的，见 `llm.rs::test_client()`）。
-* `ui-drive.ps1` 能把字弄进**已经聚焦**的 `input`（点它 + `^{a}` + `-Paste` 可行），但
-  **`-Keys "{ENTER}"` 不会激活按钮**：给设置页的「保存设置」发回车，界面毫无反应，看着像"保存失败"。
-  要点按钮就点它的坐标。另外设置页一出现提示条，下面所有控件会整体下移一行的高度 ——
-  先截图再按坐标点，别照抄十分钟前的坐标。

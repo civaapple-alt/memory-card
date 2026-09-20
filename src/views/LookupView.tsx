@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errText, newRequestId } from "../api";
 import { useActionBar } from "../actionbar";
-import { classifyDrop } from "../dragdrop";
+import { classifyContext, classifyTerm } from "../dragdrop";
 import { confidenceTone, fmtDue, nowSec } from "../format";
 import { Badge, ErrorBar, Field, Notice, Panel, Spinner } from "../ui";
 import type { Card, Deck, LookupResult } from "../types";
@@ -9,13 +9,12 @@ import { DefinitionBody } from "./DefinitionBody";
 
 export interface LookupSeed {
   deckId: number;
+  /** 要查的词。拖进来的是一句话时这里是空的 —— 那时候只填句子框，不查。 */
   term: string;
   sentence: string | null;
   /** 每次点击历史条目都要能重新触发，所以带一个自增序号。 */
   nonce: number;
 }
-
-type Mode = "word" | "sentence";
 
 export function LookupView({
   active,
@@ -36,7 +35,13 @@ export function LookupView({
   /** 后端那次查词的最长等待（秒），只用来在界面上说实话。 */
   timeoutSecs: number;
 }) {
-  const [input, setInput] = useState("");
+  /** 要查的词 / 短语。 */
+  const [termInput, setTermInput] = useState("");
+  /** 它出现的那句话（可选）。 */
+  const [ctxInput, setCtxInput] = useState("");
+  /** 句子框默认收起：多数查词只需要上面一个框。 */
+  const [ctxOpen, setCtxOpen] = useState(false);
+  const termRef = useRef<HTMLTextAreaElement | null>(null);
   const [result, setResult] = useState<LookupResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -48,10 +53,18 @@ export function LookupView({
   const [compose, setCompose] = useState(true);
   /** 正在跑的那次请求的 id：停止按钮靠它精确打中这一次。 */
   const [requestId, setRequestId] = useState<string | null>(null);
+  /**
+   * 要求把焦点交给词框的计数器。
+   *
+   * 不直接调 `termRef.current.focus()`：需要聚焦的时机（拖进来一句话、把整句挪走）
+   * 都发生在"输入区刚从收起变展开"的同一次渲染里，那时 textarea 还没挂上。
+   * 加一个自增的值，等它渲染完再聚焦。
+   */
+  const [focusTerm, setFocusTerm] = useState(0);
   const abortRef = useRef(0);
 
   const run = useCallback(
-    async (term: string, useMode: Mode, useDeckId: number) => {
+    async (term: string, sentence: string | null, useDeckId: number) => {
       const text = term.trim();
       if (!text) {
         setError("请输入要查询的词或短语");
@@ -74,7 +87,7 @@ export function LookupView({
           id,
           useDeckId,
           text,
-          useMode === "sentence" ? text : null,
+          sentence && sentence.trim() ? sentence : null,
         );
         if (token !== abortRef.current) return;
         setResult(r);
@@ -104,12 +117,26 @@ export function LookupView({
     if (id) void api.cancelLookup(id).catch(() => {});
   }, [requestId]);
 
-  // 历史里点一条 → 回填并直接查。
+  // 历史里点一条 / 拖进来一段文本 → 回填；词和句子两边都齐了才直接查。
   useEffect(() => {
     if (!seed) return;
-    setInput(seed.term);
-    void run(seed.term, seed.sentence ? "sentence" : "word", seed.deckId);
+    setTermInput(seed.term);
+    setCtxInput(seed.sentence ?? "");
+    setCompose(true);
+    setError(null);
+    if (seed.sentence) setCtxOpen(true);
+    if (!seed.term.trim()) {
+      // 拖进来的是一句话：要查的词还没说清，不查 —— 只摆好，等用户写词。
+      setFocusTerm((n) => n + 1);
+      return;
+    }
+    void run(seed.term, seed.sentence, seed.deckId);
   }, [seed, run]);
+
+  // 等词框真的挂上再聚焦（见 focusTerm 的注释）。
+  useEffect(() => {
+    if (focusTerm > 0) termRef.current?.focus();
+  }, [focusTerm]);
 
   // 请求进行中让计时器自己跑，否则用户看不到"卡了多久"。
   useEffect(() => {
@@ -124,18 +151,34 @@ export function LookupView({
       setError("先选一个卡包 —— 释义要靠卡包关键词限定领域");
       return;
     }
-    const text = input.trim();
-    if (!text) {
-      setError("请输入要查询的词或句子");
+    // 词和句子各判各的 —— 这两样东西从此不再共用同一个字符串（见 dragdrop 顶部注释）。
+    const cls = classifyTerm(termInput);
+    if (cls.kind === "asSentence") {
+      // 用户把一整句贴进了"要查的词"：把它挪到该在的框里。不丢内容，也不拿它当词去查。
+      setCtxInput(termInput);
+      setCtxOpen(true);
+      setTermInput("");
+      setError(cls.reason);
+      setFocusTerm((n) => n + 1);
       return;
     }
-    // D1：不再让用户自己选单词/句子，交给 dragdrop 里同一个分类器判断。
-    const cls = classifyDrop(text);
     if (cls.kind === "reject") {
       setError(cls.reason);
       return;
     }
-    void run(text, cls.kind === "sentence" ? "sentence" : "word", deckId);
+    // 句子是可选的；但既然填了，就得是一句像样的话 —— 否则宁可不查，
+    // 免得把一段代码或一个路径当成"它出现的语境"塞给模型。
+    let sentence: string | null = null;
+    if (ctxInput.trim()) {
+      const ctx = classifyContext(ctxInput);
+      if (ctx.kind === "reject") {
+        setCtxOpen(true);
+        setError(ctx.reason);
+        return;
+      }
+      sentence = ctx.text;
+    }
+    void run(cls.text, sentence, deckId);
   };
 
   const save = useCallback(async () => {
@@ -170,6 +213,8 @@ export function LookupView({
   const tone = confidenceTone(d?.confidence ?? "");
   const curDeck = decks.find((dk) => dk.id === deckId) ?? null;
   const composing = !result || compose;
+  /** 收起输入区后，句子框里留着什么要能看见 —— 否则释义里的「原文」是凭空冒出来的。 */
+  const ctxPreview = ctxInput.trim();
   /** 这个词在 result 所属卡包里已经有卡了 —— 主操作是"更新释义"而不是"存入新卡"。 */
   const existing = result?.existing_in_deck ?? null;
 
@@ -244,7 +289,7 @@ export function LookupView({
       )}
 
       {composing ? (
-        <Panel title="取词" actions={<span className="hint">单词 / 句子自动识别</span>}>
+        <Panel title="取词" actions={<span className="hint">一个词 + 可选的一句话</span>}>
           <Field label="卡包">
             <select
               value={deckId ?? ""}
@@ -262,19 +307,49 @@ export function LookupView({
             )}
           </Field>
 
-          <textarea
-            className="input-term"
-            rows={input.trim().length > 40 ? 3 : 1}
-            placeholder="handle / ship it / 直接贴一整句英文"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                submit();
-              }
-            }}
-          />
+          <Field label="要查的词 / 短语">
+            <textarea
+              className="input-term"
+              rows={1}
+              ref={termRef}
+              placeholder="handle / ship it / bounded queue"
+              value={termInput}
+              onChange={(e) => setTermInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submit();
+                }
+              }}
+            />
+          </Field>
+
+          {/* 句子框默认收起：多数查词只要上面那个框，多一个框就多一份犹豫。
+              但要查的词常常长在一句话里，那条路必须点得到，所以标题一直在。 */}
+          <div className="ctx-head">
+            <button type="button" className="ctx-toggle" onClick={() => setCtxOpen((v) => !v)}>
+              {ctxOpen ? "▾" : "▸"} 补充句子（可选）
+            </button>
+            {!ctxOpen && ctxPreview !== "" && (
+              <span className="hint">已填 {ctxPreview.length} 字</span>
+            )}
+          </div>
+
+          {ctxOpen && (
+            <>
+              <textarea
+                className="input-ctx"
+                rows={2}
+                placeholder="把这句话贴在这里：the request handler returns a promise"
+                value={ctxInput}
+                onChange={(e) => setCtxInput(e.target.value)}
+              />
+              <div className="hint ctx-hint">
+                贴上它出现的那句话，释义就按这句话来解；留空则只按卡包领域解释这个词。
+                要的是那一句（≤300 字），不是整段。
+              </div>
+            </>
+          )}
 
           <div className="row">
             <button className="primary" onClick={submit} disabled={busy}>
@@ -303,7 +378,12 @@ export function LookupView({
             </button>
           }
         >
-          <div className="compact-term">{input.trim()}</div>
+          <div className="compact-term">{termInput.trim()}</div>
+          {ctxPreview !== "" && (
+            <div className="hint compact-ctx">
+              附句子：{ctxPreview.length > 80 ? `${ctxPreview.slice(0, 80)}…` : ctxPreview}
+            </div>
+          )}
         </Panel>
       )}
 
