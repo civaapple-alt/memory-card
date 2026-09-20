@@ -21,7 +21,7 @@
 | `pnpm build`（vite） | 通过 |
 | `pnpm tauri build --debug --no-bundle` | 通过，产出 `src-tauri/target/debug/memory-card.exe` |
 | `pnpm tauri build`（release + 打包，先 `Remove-Item Env:CI`） | 通过，2m50s；产出独立 exe + `bundle/msi/*.msi` + `bundle/nsis/*-setup.exe` |
-| `node --test scripts/check-dragdrop.ts` | **7 个分类器测试通过**（拖入内容过滤：词 / 句 / 路径 / URL / 数字 / base64 / 代码行 / 超长 / 中文） |
+| `node --test scripts/check-dragdrop.ts` | **10 个分类器测试通过**（输入过滤 + 拖拽分派：词框 / 句子框 / 整段 / 跨行 / 代码行 / 路径 / URL / 纯数字 / base64 / 中文 / 空串 —— 第四轮从 7 个扩到 10 个，见 §9.4） |
 
 联网测试的原始输出（它断言 `handle` 在 rust 卡包下给的是句柄义，而不是通用词典的"把手"）：
 
@@ -137,7 +137,9 @@ release 打包产物的一张（`pnpm tauri dev` 之外的独立进程，cwd 不
 * **真 API 上的「停止」没按过**（第三轮新增，见 §8）：取消 / 超时 / 测试连接三件事全部是对着 `scripts/fake-llm.mjs`（`127.0.0.1:8787`）验的。取消的机制是"丢掉 future = 丢掉连接"，跟服务端是谁无关；但要真按一次，得把真 key 填进界面、再抓准 2–10 秒的响应窗口，没做。
 * **用户截图里的 `error decoding response body` 只被"像"地复现过**：`--mode truncate` 能让应用走进同一条传输层解码失败的分支（并重试到 2/2 次），但当时那份报文没抓到。本机代理（坑 10）是头号嫌疑，**没有证据链**。
 * **拖拽取词的端到端驱动**：分类器过滤规则有 `node --test scripts/check-dragdrop.ts` 覆盖，用户也已在真实窗口确认「拖一下即出释义」可用；但尚未用 `scripts/ui-drive.ps1` 留证据截图（§4 的三张截图不含拖拽）。
-* **`scripts/ui-drive.ps1` 的交互限制**（§7 末尾 + §8 末尾）：坐标点击**不会**让多行 `textarea` 获得焦点（§7 的结论）；但**单行 `input` 是可以的** —— 第三轮就是用"点一下 `input` → `^{a}` → `-Paste`"把「请求超时」改成 5 的。另外 `-Keys "{ENTER}"` **不激活按钮**（对着按钮发回车，界面毫无反应，看着像保存失败），要点按钮就点它的坐标。`-Keys` 里连续 `{TAB}` 会被丢掉（发 10 次落地约 2 次），要 TAB 就一次只发一个。这些都已写进脚本注释。
+* **「补充句子」的拖拽路径没有真实窗口证据**（第四轮新增，见 §9）：`classifyDrop` 的分派规则有单元测试，但"拖一段文字进窗口 → 落进句子框"这条端到端路径没截图 —— HTML5 拖拽没法用 `ui-drive.ps1` 模拟。这一轮验的是"手打 / 粘贴进两个框"。
+* **第四轮全部对着假模型**（第四轮新增，见 §9）：验的是"哪个框把什么传了下去"（假模型日志逐次打印 `term=` / `sentence=`）和界面显示规则。真 API 上没跑过 —— 真模型回什么形状的 `in_context` 不在这一轮的验证范围里。
+* **`scripts/ui-drive.ps1` 的交互限制**（§7 末尾 + §8 末尾）：坐标点击**不会**让多行 `textarea` 获得焦点（§7 的结论）；但**单行 `input` 是可以的** —— 第三轮就是用"点一下 `input` → `^{a}` → `-Paste`"把「请求超时」改成 5 的。第四轮点 `textarea`（句子框）却**能**聚焦（§9.6 最后一条），与 §7 的结论不一致 —— 两次各留一次观察，等第三次验完再改脚本注释。另外 `-Keys "{ENTER}"` **不激活按钮**（对着按钮发回车，界面毫无反应，看着像保存失败），要点按钮就点它的坐标。`-Keys` 里连续 `{TAB}` 会被丢掉（发 10 次落地约 2 次），要 TAB 就一次只发一个。这些都已写进脚本注释。
 * **句子流程 B**：UI 已去掉"单词 / 句子"开关（改由分类器自动判断），但"整句大意 + 难点词列表、逐条入卡"**未实现** —— 句子与单词仍共用同一个单次释义 prompt。抽词质量**没实测**。
 * **几十张卡规模下的复习性能与滚动体验**没压测。
 * **费用**：只在单次查询尺度上看过 token 数，没有按天累计的账 —— "第三轮那几十次查询花了 0"是设计如此（假服务器不往外发请求），不是记账记出来的。`cargo test` 里那 6 个假服务器测试同样 0 费用、毫秒级。
@@ -335,3 +337,100 @@ $env:DEEPSEEK_BASE_URL = 'http://127.0.0.1:8787'
 * **提示条会把下面的东西整体推下去**：保存成功后顶部多一条提示条，底下所有控件各下移一行 —— 拿十分钟前的坐标再点「保存设置」，正好点到「测试连接」上。每次动手前重新截一张。
 * **`node -e "..."` 里的反引号会被 pwsh 吃掉**（模板字符串全废）：临时脚本写成 `.verify\dbdump.mjs` 再 `node` 跑它。
 * 不打算发布的验证副本一律丢进 `.verify/`（已 gitignore）：改名 exe、独立 `fake.db`、`dbdump.mjs` 都在那儿。
+
+## 9. 第四轮：词和句子拆成两个输入框（2026-09-21）
+
+### 9.1 用户报的两件事
+
+1. **界面在撒谎**：只查一个词 `presentation`，释义里却有一块标题写着「在这句话里」—— 用户从没给过句子。
+2. **一个框装不下两件事**：想"查段里那个词，同时让模型知道它出现在哪"，没有地方写那一句。
+
+第一件是显示层的 bug，第二件是输入层的缺口：一个输入框同时承担了 `term` 和 `sentence` 两个语义。
+
+### 9.2 根因（读代码读出来的，不是猜的）
+
+| 事实 | 位置 |
+|---|---|
+| prompt 里 `sentence:` 是**必填**字段：没有句子时由后端填 `(无上下文，仅给出该词)` 再发给模型 | `src-tauri/src/llm.rs:131`（模板）、`llm.rs:133`（默认值） |
+| 于是模型**永远**有上下文可答，它回 `in_context` 是照着要求回，不是编造 | 同一处 |
+| 前端只有一个输入框，那一个字符串**同时**当 `term` 和 `sentence` 传下去 | 改前的 `src/views/LookupView.tsx` |
+| 界面只判断 `inContext` 有没有值，不看有没有句子 | 改前的 `src/views/DefinitionBody.tsx` |
+
+三段拼起来就是那句话：**"没有句子"这件事在前端就丢了**，后端只好给个占位符，模型照着答，界面照着显示。所以这不是模型的问题，也不是 prompt 写坏 —— 后端一行没改：`build_body(term, sentence, …)` 本来就收两个参数。
+
+### 9.3 修法
+
+* **第一层**：「在这句话里」这一块改挂在 `sentence` 上（`{sentence && inContext && …}`），「原文」同理。没有句子时这两块都不出现 —— 界面不说的，就是它不知道的。
+* **第二层**：输入区拆成两个框，**句子框默认收起**（"查一个词就走"是最常见的用法，不该为此多看一眼输入框）。`src/dragdrop.ts` 随之拆成 `classifyTerm`（词框）/ `classifyContext`（句子框）+ 共用的 `sharedReject`，外加 `classifyDrop` 做拖拽分派：能从词框过就绝不塞进句子框。
+* 一整句误贴进词框时**不报错、不丢弃**：判成 `asSentence`，把它挪进句子框、清空词框、只报一句"它该在「补充句子」里"。
+* **prompt 一个字没改，`PROMPT_VERSION` 没 bump** —— 送给模型的字段本来就是对的，本地释义缓存不用失效。
+* 文档同步：PRD §4.2 表格 B 行 + 新增 §4.2.1 + §4.3/§4.4 流程 + 风险表一行；README 的释义顺序与用法；DEVELOPMENT 的模块职责与 UI 契约三条。
+
+### 9.4 自动化测试
+
+| 命令 | 结果 |
+|---|---|
+| `node --test scripts/check-dragdrop.ts` | **10 个分类器测试通过**（第四轮从 7 个扩到 10 个） |
+| `npx tsc --noEmit` | 通过 |
+| `pnpm build`（vite） | 通过 |
+| `pnpm tauri build --debug --no-bundle` | 通过，产出 `src-tauri/target/debug/memory-card.exe` |
+| `cargo test`（src-tauri） | **17 个仍全绿** —— 后端一行没改，跑一遍确认没被连带弄坏 |
+
+10 个分类器测试各断言什么（名字就是 `node --test` 打出来的名字）：
+
+| 测试 | 断言 |
+|---|---|
+| 词框只收词和短语 | `bounded` / `  handle  ` / `ship it` / `returns a promise` / `JoinHandle` 都判 `term` |
+| 单个词不受 40 字限制，多词短语才受 | `JoinHandleOfABackgroundTask`、`build_the_request_handler_chain_for_the_client` 是词；3 词 40 字内的短语也是词；`task-runner-with-a-very-long-name indeed-extra`、`a b c d` 才是句子 |
+| 整句贴进词框 → `asSentence` | 整句判 `asSentence`（调用方该挪框）；**同一句在句子框里是合法的** —— 两个框判的本来不是一回事 |
+| 整段文本：词框说"整段"，句子框说"太长" | 301 字：词框原因含「整段」、句子框含「太长」、拖拽报「整段」那条 |
+| 句子框收跨行，但不超过 4 行 | `the request handler\n\nreturns a promise`（正文里夹被折断的空行）过；5 行报「跨了 5 行」 |
+| 句子框收代码行，词框仍然拦代码 | `const handler = createHandler(req);` 进句子框；`const x = 1;` / `if err != nil { return }` / `fn main() -> Result<(), E>` 在词框被拦 |
+| 路径 / URL / 数字 / base64 两个框都拦 | `C:\Users\…`「路径」、`https://…`「URL」、`12345`「数字」、40+ 位 base64 |
+| 中文内容拦掉 | 拉丁字母占比 < 0.5 →「大部分不是拉丁字母」 |
+| 空内容拦掉 | 词框：空串「请输入…」/ 空白「…没有文本」；句子框空白「没有文本」 |
+| 拖拽分派 | `handle` → 词框，整句 → 句子框，路径 / 空串 → 只提示不落框 |
+
+### 9.5 真实窗口的四段
+
+驱动方式同第三轮：改名副本 `.verify/mc-lookup.exe` + 独立库 `MEMORY_CARD_DB=.verify/fake.db` + `NO_PROXY=127.0.0.1,localhost`，后端换成 `node scripts/fake-llm.mjs --port 8787 --mode definition`。**只对假模型**：不联网、不花 token、不碰正在用的那份数据库。
+
+假模型日志是这一轮最硬的一条证据 —— `--mode definition` 会把每次请求体里的 `term:` / `sentence:` 原样打出来（`scripts/fake-llm.mjs` 的 `describeBody`，顺手修了"只等请求头、不等完 body"的 bug）：
+
+```text
+[fake-llm] #1 POST /chat/completions HTTP/1.1  (mode=definition)
+[fake-llm]     term="presentation" sentence="(无上下文，仅给出该词)"
+[fake-llm] #2 POST /chat/completions HTTP/1.1  (mode=definition)
+[fake-llm]     term="presentation" sentence="the presentation layer decides what the user actually sees"
+```
+
+两次请求的 `term` 一模一样，**只有 `sentence` 不同**；第一段的占位符就是 `llm.rs:133` 那个默认值（前端没传句子时后端自己填的）。所以两个框确实是分开传的，不是同一个字符串换了个地方放。
+
+复跑提醒：`.verify/fake.db` 里的 `def_cache` 会把查过的词记住 —— 不先清掉，第一次点「查询」只会命中缓存（卡片右上角显示「缓存」、耗时 0ms），假服务器一条请求都收不到。上面这段日志是清空 `def_cache` 之后录的；清空前的缓存命中同样是对的界面行为（不显示「在这句话里」）。
+
+四段真实窗口 + 五张截图（`docs/evidence/`，与 `.verify/` 里的原图逐字节相同）：
+
+| 截图 | 做了什么 | 看到什么 |
+|---|---|---|
+| `input-00-sentence-box-open.png` | 打开取词页，展开「补充句子（可选）」 | 上框「要查的词 / 短语」，下框默认收起 —— 点开才占地方 |
+| `input-01-word-no-sentence.png` | 只填 `presentation`，留空句子框，查询 | 释义里**没有**「在这句话里」，也**没有**「原文」 |
+| `input-02-word-plus-sentence.png` | 词 + 句子框填 `the presentation layer decides what the user actually sees` | 「在这句话里」和「原文」都在；收起句子框后，顶部仍写着「附句子：…」 |
+| `input-03-sentence-moved.png` | 整句 `the presentation layer decides what the user actually sees` 贴进**词框** | **没有发请求**：提示「这看着是一句话 —— 它该在「补充句子」里，上面只留要查的那个词。」；句子已自动挪进下框并展开，词框清空且拿到焦点 |
+| `input-04-paragraph-rejected.png` | 359 字的整段贴进词框 | 提示「这是 359 字的整段文本 —— 这个工具查词，不解释整段。只取要查的那个词，或它出现的那一句。」，同样没发请求 |
+
+上面这一段在写文档时又原样跑了一遍（假模型 + `.verify/mc-lookup.exe`），前两段的结论一致，日志就是上面那段引文。四张有提示条的截图里，提示条把下面的控件整体推下去了 —— 见 §9.6。
+
+### 9.6 与 PRD 的两处有意偏差
+
+两处都写在代码注释里，也写进了 PRD §4.2.1：
+
+1. **句子框收代码行**（`const handler = createHandler(req);` 判 `context`）。PRD §4.2 原本把"像代码"一律拦掉 —— 但读者常常就是在源码里碰到这个词，那一行本身就是"它出现的那句"。词框仍然拦代码：词框误判的代价是卡片键和缓存键一起错，句子框误判只是模型多一句提示。
+2. **单个词不受 40 字限制**（`JoinHandleOfABackgroundTask` 是词）。长度门槛只管"多词短语"：4 个词往后基本就是一句话了，而长标识符是货真价实的词 —— 拦掉它，用户得为拖进来的东西重打一遍。
+
+另外，"纯数字和符号"在**两个框都拦**（`sharedReject`），这一条跟 PRD 一致，不是偏差。
+
+### 9.7 这一轮踩到的取证坑（都不是产品问题）
+
+* **提示条和展开的句子框会把下面的控件整体下移**：点「查询」两次落到提示文字上（界面毫无反应，看着像按钮坏了）。最后是用 System.Drawing 逐行扫 accent 色 `#4F9CF9` 的像素、量出按钮的 y 才点中的。别拿上一次的截图点下一次的坐标。
+* **折叠标题那种按钮只有文字那么宽**：点在那一行的空白处没反应，要点在文字上。
+* **反过来的一条好消息**：这一轮给 `textarea`（句子框）的坐标点击**能**聚焦，随后 `^{a}` + 粘贴三次都落进去了（截图可证）。这跟 §7 记的"点 `textarea` 不可靠"相反 —— 两条各是一次观察，先都记在 §5 那条里，没有解释。

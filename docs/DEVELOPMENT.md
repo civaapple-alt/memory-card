@@ -57,7 +57,7 @@ node scripts/fake-llm.mjs --port 8787 --mode hang
 | `src-tauri/src/models.rs` | 前后端共用的序列化模型 |
 | `src-tauri/src/error.rs` | `AppError`，前端拿到的是字符串 |
 | `src/App.tsx` | 外壳：五个标签页 + 全局刷新 + 全局拖拽放置区 |
-| `src/dragdrop.ts` | 拖入内容判断：纯函数 `classifyDrop` / `readDropText`，测试在 `scripts/check-dragdrop.ts` |
+| `src/dragdrop.ts` | 输入判断：纯函数 `classifyTerm`（词框）/ `classifyContext`（句子框）/ `classifyDrop`（拖进来的东西该落哪个框）/ `readDropText`，测试在 `scripts/check-dragdrop.ts` |
 | `src/api.ts` | `invoke` 封装 —— **所有命令名只在这里出现** |
 | `src/types.ts` | 与 `models.rs` 一一对应的类型 |
 | `src/format.ts` | 时间 / 间隔 / 置信度的显示格式 |
@@ -78,9 +78,11 @@ node scripts/fake-llm.mjs --port 8787 --mode hang
 ### UI 契约（小窗是硬约束）
 
 * **主操作一律走底部常驻动作栏**（`src/actionbar.tsx` 的 `useActionBar`）。不要把"存入卡包""评分"这类主操作放回滚动区 —— 小窗只有 440×620，一滚动就得拖着找按钮，这正是这一版专门修掉的问题。
-* **不做"单词 / 句子"模式开关**。是词还是句由 `classifyDrop`（和拖拽同一个分类器）判断；两处判断一旦分叉，就会出现"拖进来的能查、粘进来的不能查"这类怪事。
+* **词和句子是两个输入框，不是一个框的两种模式**（2026-09-21）。上框的内容就是 `term`，下框（可空的「补充句子」）就是 `sentence`，**两者绝不能传成同一个字符串** —— 曾经就是那样：整句同时当 term 和 sentence 送出去，"句中哪个词"由模型猜，而 `cache_key` / `term_key` 都跟着这串文本走。判断规则按框分成 `classifyTerm` / `classifyContext`，拖拽走 `classifyDrop` 分派；三处共用底层规则（`sharedReject`），别各自另写一套。
+* **「在这句话里」必须挂在 `sentence` 上**（`DefinitionBody`）。模型无论有没有上下文都会填 `in_context`；无句子时它填的是领域知识，显示出来就是在撒谎。同理，别为了"省 token"去改 prompt 让它留空 —— 那要 bump `PROMPT_VERSION`，见下面第 2 条。
+* **整段文章不做释义**。段落不是一张卡。被贴成长文本时给明确引导（"只取要查的那个词，或它出现的那一句"），别悄悄拿它当句子或词去查。
 * **`why_translation_fails` 默认不展示**（PRD P3 修订）。字段与 prompt 都保留，别删；要重新展示先改 PRD。
-* 键盘：输入框内 `Enter` = 查询、`Shift+Enter` = 换行；结果出来后、焦点不在输入框时 `Enter` = 主操作、`Esc` = 丢弃。
+* 键盘：词框内 `Enter` = 查询、`Shift+Enter` = 换行；**句子框里 `Enter` 就是换行**（那里本来就可能有多行，不能抢）；结果出来后、焦点不在输入框时 `Enter` = 主操作、`Esc` = 丢弃。
 * **取词页常驻挂载，切标签页只切 `display`、不卸载**（`App.tsx` 里那个 `hidden={tab !== "lookup"}`）。它身上挂着的是"已经付过钱的那次模型结果"，卸载就没了 —— 曾经的 bug 就是"查完切去复习，回来一片空白"。代价是它必须在后台让出**动作栏**和**全局键盘**：`useActionBar(node, deps, active)` 的第三个参数、以及 `LookupView` 里 keydown 开头的 `if (!active) return`，都是在干这个，删了就会出现"在复习页按 Esc 清掉了取词页的结果"。其余页照旧按需挂载（每次进入重新查库才是对的：历史要看到新记录、复习要看到刚到期的卡）。
 * **主操作文案必须说真话。** 这个词在卡包里**已有卡**时，主操作是「更新「X」释义」而不是「存入」；存完的提示用**后端返回的 `saved.deck_name`**，不要用请求里的 `result.deck_name` —— 卡落在哪个卡包以数据库为准。
 * **存入的目标是 `result.deck_id`，不是下拉框此刻选中的那个卡包。** 释义是用那个卡包的关键词限定算出来的，`term_key` 又带 `deck_id`，塞进别的卡包就同时犯了"串领域"和"另建一张卡"两个错。历史条目同理：点它会连卡包一起切过去。
@@ -138,5 +140,5 @@ node scripts/fake-llm.mjs --port 8787 --mode hang
 | `ui-drive.ps1` | 驱动真实窗口：激活、粘贴、点击、发按键（发之前断言前台窗口） | 没有人手时跑端到端流程。`-ClickAt "200,213"` 坐标相对窗口左上角；`-Paste` 走剪贴板；`-Wait` 毫秒；`-Out` 顺带截图。两个实测坑：**点按钮可靠、点文本框不可靠**（坐标点击不会把焦点给 textarea，之后的 `-Paste` 静默不落），**`-Keys` 里连发一长串 `{TAB}` 会掉键**（发 10 个只落 2 个）—— 所以优先"点按钮"而不是"数 TAB"，非要 TAB 就一次只发一个。**想让它查出东西，点一条历史记录比想办法把字弄进输入框省事**（历史点击本身就会触发查询） |
 | `shot-window.ps1` | 只截指定进程的顶层窗口，不截整个屏幕 | 需要视觉证据、又不想把用户桌面拍进去 |
 | `win-shot.ps1` | 截窗口的公共实现（DWM 物理框 + `PrintWindow`），给上面两个脚本 dot-source | 不要在别处另写一份截窗口代码：见「坑 8」，写错的那个版本会静默截偏 |
-| `check-dragdrop.ts` | 拖入分类器的单元测试，`node --test scripts/check-dragdrop.ts`（Node 24 原生跑 TS，不引测试框架） | 改了 `src/dragdrop.ts` 的规则之后 |
-| `fake-llm.mjs` | 本机假模型：`--mode hang`（收下连接永不回话）/ `truncate`（声明 200 字节只给 20 字节）/ `unauthorized` / `ok` | 复现"卡住、被截断、401"这类故障，以及验证「停止」「超时」「测试连接」。真 API 平时是好的，复现不出来也不该为它花钱 |
+| `check-dragdrop.ts` | 输入分类的单元测试（词框 / 句子框 / 拖拽分派各一组），`node --test scripts/check-dragdrop.ts`（Node 24 原生跑 TS，不引测试框架） | 改了 `src/dragdrop.ts` 的规则之后 |
+| `fake-llm.mjs` | 本机假模型：`--mode hang`（收下连接永不回话）/ `truncate`（声明 200 字节只给 20 字节）/ `unauthorized` / `ok` / `definition`（回一条完整的释义 JSON，并把请求体里的 `term:` / `sentence:` 打进日志） | 复现"卡住、被截断、401"这类故障，以及验证「停止」「超时」「测试连接」和**界面到底把两个框传成了什么**。真 API 平时是好的，复现不出来也不该为它花钱 |
