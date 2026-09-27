@@ -60,7 +60,7 @@ pnpm tauri build
 
 发行包**未做代码签名**，Windows 会弹 SmartScreen 警告 —— 本地自用点"仍要运行"即可。Key 在「设置」页填（双击启动不继承 shell 环境变量，见上）。
 
-打包后把三个产物 + `SHA256SUMS.txt` 复制一份到 `release/<版本>/`（已 gitignore）—— `target/` 会被 `cargo clean` 清掉，那份是拿来直接发给别人 / 自己双击的。当前待发布版本是 `0.1.2`。
+本地打包后可把三个产物 + `SHA256SUMS.txt` 复制到 `release/<版本>/`（已 gitignore）—— `target/` 会被 `cargo clean` 清掉。当前 GitHub 正式版是 [v0.1.2](https://github.com/civaapple-alt/memory-card/releases/tag/v0.1.2)。
 
 ## GitHub Release（Windows / macOS）
 
