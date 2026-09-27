@@ -1,6 +1,6 @@
 # 开发指南
 
-面向项目贡献者：环境、构建 / 测试命令、模块职责和容易破坏的约定。当前完整的桌面构建流程在 Windows 上验证；其他平台尚未记录或验证。
+面向项目贡献者：环境、构建 / 测试命令、模块职责和容易破坏的约定。本地桌面构建已在 Windows 上验证；GitHub Actions 已配置 macOS universal 构建，需等首次 workflow 实跑后确认。
 
 产品意图和设计取舍见 [PRD.md](PRD.md)；验证结论见 [VERIFICATION.md](VERIFICATION.md)。
 
@@ -41,6 +41,19 @@ node scripts/fake-llm.mjs --port 8787 --mode hang
 `live_llm` 会读取仓库根目录的 `.env`。设置了 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 时，`cargo test`（不只是 `--test live_llm`）会执行真实模型请求并可能产生费用；没有 key 时该集成测试会跳过。日常离线验证用 `cargo test --lib`。只有确认愿意联网并承担费用时才运行 `live_llm`；加 `--nocapture` 可查看模型响应摘要、耗时和 token 数。
 
 `llm.rs` 里的取消/超时/重试那几个测试**不需要网**：它们在 `127.0.0.1` 上起一个按剧本说话的假服务器（见 `llm.rs` 的 `fake_server`），所以"卡住 30 秒"这种用例也是毫秒级跑完的。
+
+## 自动发布（Windows + macOS）
+
+`.github/workflows/release.yml` 在推送 `vX.Y.Z` 格式的 tag 时运行。Windows job 构建免安装 exe、MSI 和 NSIS；macOS job 构建同时支持 Intel 与 Apple Silicon 的 universal DMG。两个 job 都先检查 tag 与 `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 的版本一致，再运行不需要 API Key 的测试。发布 job 汇总制品、附上该 tag 的 `LICENSE`、生成 `SHA256SUMS.txt` 并创建 GitHub Release。
+
+发版前先在同一个提交中更新上述三个版本字段并推送分支，然后从该提交创建并推送新 tag：
+
+```powershell
+git tag v0.1.2
+git push origin v0.1.2
+```
+
+将示例版本替换为实际版本。Workflow 使用仓库提供的 `GITHUB_TOKEN`，不需要个人 `gh` token 或模型 API Key。`v0.1.1` 是 workflow 加入前手动发布的版本，不会因新增 workflow 自动重建。发行包未签名；macOS DMG 也未 notarize，首次启动可能出现 Gatekeeper 警告。
 
 ## 配置优先级
 

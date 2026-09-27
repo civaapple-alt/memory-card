@@ -62,6 +62,12 @@ pnpm tauri build
 
 打包后把三个产物 + `SHA256SUMS.txt` 复制一份到 `release/<版本>/`（已 gitignore）—— `target/` 会被 `cargo clean` 清掉，那份是拿来直接发给别人 / 自己双击的。当前是 `release/0.1.1/`。
 
+## GitHub Release（Windows / macOS）
+
+推送 `vX.Y.Z` tag 会触发 GitHub Actions：自动构建 Windows exe / MSI / NSIS，以及同时支持 Intel 和 Apple Silicon 的 macOS universal DMG；Release 同时附带 MIT 许可证和 SHA-256 清单。具体发版步骤见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#自动发布windows--macos)。
+
+发行包尚未做代码签名；macOS DMG 也未 notarize，首次打开时 Windows SmartScreen 或 macOS Gatekeeper 可能提示安全警告。
+
 ## 怎么用
 
 * **取词**：上框写**要查的词 / 短语**，按 `Enter`（`Shift+Enter` 换行）。如果这个词是在一句话里遇到的，展开下面的「**补充句子（可选）**」把那一句贴上 —— 释义就会按那句话说，结果里多出「在这句话里」和「原文」两块；不填就只按卡包领域解释这个词（**这时候不会有「在这句话里」**）。也可以直接把选中的文字**拖进窗口**：一个词就进上框，一整句就进句子框并提示你补上要查的词。过滤（路径 / URL / 纯数字 / base64 / 代码行 / 超长 / 中文）两框各有一套：词框严到会拦代码行，句子框允许代码行（你就是在源码里遇到的它）。**整段文章不解释** —— 那是不能复习的东西，工具会直接说清。剪贴板监听**不做** —— 见下方"明确不做"。
