@@ -1,20 +1,21 @@
 # 开发指南
 
-改代码前读这份。命令、模块职责、**不能改坏的约定**、本机踩过的坑。
+面向项目贡献者：环境、构建 / 测试命令、模块职责和容易破坏的约定。当前完整的桌面构建流程在 Windows 上验证；其他平台尚未记录或验证。
 
 产品意图和设计取舍见 [PRD.md](PRD.md)；验证结论见 [VERIFICATION.md](VERIFICATION.md)。
 
 ## 环境
 
-| 需要什么 | 本机实测 | 备注 |
+| 需要什么 | 已验证基线 | 备注 |
 |---|---|---|
 | Rust toolchain | 1.96.0，`x86_64-pc-windows-msvc` | Tauri 2 后端 |
-| Node | v24.18.0（≥ 20 即可） | 前端构建 |
+| Node | v24.18.0（Vite 8 要求 `^20.19.0 || >=22.12.0`） | 前端构建 |
 | pnpm | 11.9.0 | 包管理；npm 也行但 lockfile 是 pnpm 的 |
 | Visual Studio 2022 | Community，含 C++ 生成工具 | MSVC 链接器，Tauri 与 rusqlite 都要 |
 | WebView2 Runtime | 153.0.4234.32 | Win11 自带；Tauri 前端渲染依赖 |
 | Tauri CLI | **不需要全局安装** | 已作为 devDependency（`@tauri-apps/cli`），走 `pnpm tauri` |
-| cmake / nasm | **没有装，也别装** | 见「坑 1」 |
+
+当前 `reqwest` 配置在 Windows 上使用系统 TLS（`native-tls`）；标准构建不需要额外安装 CMake 或 NASM。不要把维护者机器上的具体版本当作唯一可用版本。
 
 ## 常用命令
 
@@ -22,29 +23,30 @@
 pnpm install
 
 pnpm tauri dev                            # 开发窗口，前端热更新
-Remove-Item Env:CI                        # 见「坑 3」；只影响当前会话
+Remove-Item Env:CI -ErrorAction SilentlyContinue # 见「坑 3」；只影响当前会话
 pnpm tauri build                          # release：独立 exe + msi + nsis 安装包
 pnpm tauri build --debug --no-bundle      # 产出 target/debug/memory-card.exe，不打安装包
 pnpm build                                # 只构建前端（vite build）
 npx tsc --noEmit                          # 前端类型检查
 
-cd src-tauri
-cargo test                                # 单元测试（SM-2 + prompt 构造）
-cargo test --test live_llm -- --nocapture # 联网集成测试，会真花 token
+Push-Location src-tauri
+cargo test --lib                          # Rust 单元测试；不调用真实模型
+cargo test --test live_llm -- --nocapture # 可选：真实联网集成测试
+Pop-Location
 
-# 离线复现"卡住 / 响应被截断 / 401"：假模型 + 应用指过去（不花 token）
+# 在仓库根目录的另一个终端启动本机假模型（不联网、不花 token）
 node scripts/fake-llm.mjs --port 8787 --mode hang
 ```
 
-`live_llm` 在没配 key 时自动跳过，所以无脑跑 `cargo test` 是安全的。加 `--nocapture` 才看得到 `[live] handle -> ...` 那两行输出（含耗时和 token 数）。
+`live_llm` 会读取仓库根目录的 `.env`。设置了 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 时，`cargo test`（不只是 `--test live_llm`）会执行真实模型请求并可能产生费用；没有 key 时该集成测试会跳过。日常离线验证用 `cargo test --lib`。只有确认愿意联网并承担费用时才运行 `live_llm`；加 `--nocapture` 可查看模型响应摘要、耗时和 token 数。
 
 `llm.rs` 里的取消/超时/重试那几个测试**不需要网**：它们在 `127.0.0.1` 上起一个按剧本说话的假服务器（见 `llm.rs` 的 `fake_server`），所以"卡住 30 秒"这种用例也是毫秒级跑完的。
 
 ## 配置优先级
 
-**settings 表 > 环境变量**。首次启动由 `seed_settings_from_env` 把 env 写进表；之后一律以表为准 —— 所以在设置页改过 key 之后，再改 `.env` 是不生效的。
+**settings 表 > 环境变量**。首次启动由 `seed_settings_from_env` 把 env 写进表；之后一律以表为准，所以在设置页改过 key 之后，再改 `.env` 不会覆盖已保存值。
 
-`.env` 放在仓库根，字段名沿用 OpenAI 风格：`OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL`。
+`.env` 放在仓库根。支持 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL`，也兼容 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL`；同一项同时设置时优先使用 `DEEPSEEK_*`。不要提交包含真实密钥的 `.env`。
 
 ## 模块职责
 
@@ -108,7 +110,9 @@ node scripts/fake-llm.mjs --port 8787 --mode hang
 * 托盘：`Cargo.toml` 里开着 `tray-icon` feature 但没有代码。真要加，连着 PRD §6 的"托盘显示待复习数"一起做，别只开开关。
 * **`tauri.conf.json` 的 `dragDropEnabled` 保持 `false`。** 拖拽取词依赖 WebView 的 HTML5 拖拽事件（`src/App.tsx` 挂在 window 上、`src/dragdrop.ts` 判内容）；改成 `true` 会让 Tauri 原生接管文件拖拽、文本拖拽事件收不到，功能**静默失效**。
 
-## 这台机器上的坑
+## 维护者本机排障记录
+
+以下经验来自维护者的一台 Windows 机器，不是项目的通用环境要求。DPI、输入法、代理和进程实例等行为会因系统配置不同而变化；遇到相似问题时先确认自己的环境，再套用对应排查步骤。
 
 1. **`reqwest` 0.13 的 `default-tls` 是 rustls**（0.12 时代它才是 native-tls）→ 会拉 `aws-lc-sys` → 需要 cmake/nasm → 本机没有 → 编译直接失败。必须写 `default-features = false, features = ["native-tls", "json"]`，Windows 下走 schannel，零外部依赖。
 2. **dev / build 之分是编译期的。** 跑过 `cargo test` 会把 `target/debug/memory-card.exe` 换成指向 `devUrl`(1420) 的版本，此时直接启动就是 `ERR_CONNECTION_REFUSED`。要跑独立 exe，先 `pnpm tauri build --debug --no-bundle`。

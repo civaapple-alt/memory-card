@@ -27,7 +27,7 @@
 
 ## 快速开始
 
-前置：Rust 1.96+（MSVC toolchain）、Node 20+、pnpm、Visual Studio 2022（C++ 生成工具）、WebView2 Runtime。
+前置：Rust 1.96+（MSVC toolchain）、Node 20.19+ 或 22.12+、pnpm、Visual Studio 2022（C++ 生成工具）、WebView2 Runtime。
 
 ```powershell
 pnpm install
@@ -99,8 +99,12 @@ memory-card/
 ## 文档
 
 * [docs/PRD.md](docs/PRD.md) —— 产品需求与设计。为什么不做全局热键、卡包为什么是语义作用域、数据模型、释义输出契约、DeepSeek 接入要点、成功指标。
-* [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) —— 环境、构建 / 运行 / 测试命令、模块职责、**不能改坏的几条约定**、这台机器上踩过的坑。
+* [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) —— 开发环境、构建 / 测试命令、模块职责、**不能改坏的约定**和维护者本机排障记录。
 * [docs/VERIFICATION.md](docs/VERIFICATION.md) —— 已经验证到哪一步、怎么自己复现、哪些还没验证。
+
+## 许可证
+
+本项目使用 MIT License，详见 [LICENSE](LICENSE)。
 
 ## 状态
 
