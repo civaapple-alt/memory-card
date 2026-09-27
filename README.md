@@ -55,12 +55,12 @@ pnpm tauri build
 | 产物 | 用途 | 体积 |
 |---|---|---|
 | `src-tauri/target/release/memory-card.exe` | 免安装，双击即跑（仍需 WebView2 Runtime） | 6.5 MB |
-| `src-tauri/target/release/bundle/nsis/memory-card_0.1.1_x64-setup.exe` | 安装包，最小 | 2.3 MB |
-| `src-tauri/target/release/bundle/msi/memory-card_0.1.1_x64_en-US.msi` | MSI，走组策略 / 批量部署 | 3.2 MB |
+| `src-tauri/target/release/bundle/nsis/memory-card_0.1.2_x64-setup.exe` | 安装包，最小 | 约 2.4 MB |
+| `src-tauri/target/release/bundle/msi/memory-card_0.1.2_x64_en-US.msi` | MSI，走组策略 / 批量部署 | 约 3.3 MB |
 
 发行包**未做代码签名**，Windows 会弹 SmartScreen 警告 —— 本地自用点"仍要运行"即可。Key 在「设置」页填（双击启动不继承 shell 环境变量，见上）。
 
-打包后把三个产物 + `SHA256SUMS.txt` 复制一份到 `release/<版本>/`（已 gitignore）—— `target/` 会被 `cargo clean` 清掉，那份是拿来直接发给别人 / 自己双击的。当前是 `release/0.1.1/`。
+打包后把三个产物 + `SHA256SUMS.txt` 复制一份到 `release/<版本>/`（已 gitignore）—— `target/` 会被 `cargo clean` 清掉，那份是拿来直接发给别人 / 自己双击的。当前待发布版本是 `0.1.2`。
 
 ## GitHub Release（Windows / macOS）
 

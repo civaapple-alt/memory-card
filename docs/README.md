@@ -14,4 +14,4 @@
 
 ## 一句话现状
 
-v0.1.1 已发布。词与补充句子分开输入，支持拖拽取词、领域释义、入卡、SM-2 复习、历史记录，以及查询停止和可配置超时。查词后可按 Enter 执行主操作；完整句子拆解、托盘图标、到期通知和释义手工编辑仍未实现，详见 [README](../README.md) 与 [VERIFICATION.md](VERIFICATION.md)。
+v0.1.2 正在通过 GitHub Actions 准备 Windows 与 macOS universal 发行包。词与补充句子分开输入，支持拖拽取词、领域释义、入卡、SM-2 复习、历史记录，以及查询停止和可配置超时。查词后可按 Enter 执行主操作；完整句子拆解、托盘图标、到期通知和释义手工编辑仍未实现，详见 [README](../README.md) 与 [VERIFICATION.md](VERIFICATION.md)。
